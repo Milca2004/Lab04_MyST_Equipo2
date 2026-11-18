@@ -203,7 +203,7 @@ def trend_momentum_features(close):
 def time_features(index):
     """Familia tiempo: hora del día y día de la semana (UTC) en seno y coseno."""
     hour = index.hour.to_numpy()
-    day = index.dayofweek.to_numpy()
+    day = index.day_of_week.to_numpy()
     return pd.DataFrame(
         {
             "hour_sin": np.sin(2 * np.pi * hour / 24),
@@ -497,10 +497,10 @@ def stationarity_tests(series):
     Estacionaria = ADF rechaza (p < 0.05) y KPSS no rechaza (p > 0.05).
     """
     x = series.dropna().to_numpy()
-    adf_stat, adf_p = adfuller(x, maxlag=24, autolag="AIC")[:2]
+    adf_stat, adf_p = adfuller(x, maxlag=24, autolag="AIC", result_object=False)[:2]
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", InterpolationWarning)
-        kpss_stat, kpss_p = kpss(x, regression="c", nlags="auto")[:2]
+        kpss_stat, kpss_p = kpss(x, regression="c", nlags="auto", result_object=False)[:2]
     return {
         "adf_stat": float(adf_stat),
         "adf_pvalue": float(adf_p),
