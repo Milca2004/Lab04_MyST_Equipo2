@@ -32,14 +32,21 @@ Supuestos y hallazgos del archivo de Canvas (verificados corriendo código):
 * 4 barras con volumen cero (2019-06-07, 2020-12-21, 2021-02-11,
   2023-03-24); se conservan.
 """
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy import stats
+from sklearn.feature_selection import mutual_info_regression
+from statsmodels.tools.sm_exceptions import InterpolationWarning
+from statsmodels.tsa.stattools import acf, adfuller, kpss
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = REPO_ROOT / "data" / "Binance_BTCUSDT_1h.csv"
+ARTIFACTS_DIR = REPO_ROOT / "artifacts"
+SEED = 42
 
 RAW_TO_CLEAN_COLUMNS = {
     "Open": "open",
@@ -381,3 +388,237 @@ def cleaning_summary(raw, bars):
         "inicio": str(bars.index[0]),
         "fin": str(bars.index[-1]),
     }
+
+
+# ---------------------------------------------------------------------------
+# Análisis exploratorio y de variables (SOLO con datos de entrenamiento)
+# ---------------------------------------------------------------------------
+
+EDA_FOLD = 4  # el train del fold 4 (2017-08 a 2024-12) contiene a los demás
+HORIZONS = (1, 4, 24)
+HOURS_PER_YEAR = 24 * 365
+
+# Regímenes del train del fold 4. Las fronteras son los puntos de giro del
+# cierre diario con oscilaciones de al menos 60% (máximos y mínimos del
+# periodo, verificados en el EDA); se omitió el rebote de un mes de
+# 2018-02-05 a 2018-03-04 por ser ruido dentro del mercado bajista de 2018.
+REGIMES = (
+    ("Burbuja 2017", "2017-08-17", "2017-12-16"),
+    ("Invierno cripto 2018", "2017-12-17", "2018-12-15"),
+    ("Recuperación 2019", "2018-12-16", "2019-06-26"),
+    ("Corrección y COVID", "2019-06-27", "2020-03-12"),
+    ("Ciclo alcista 2020-21", "2020-03-13", "2021-11-08"),
+    ("Bajista 2022", "2021-11-09", "2022-11-21"),
+    ("Recuperación y ETF 2023-24", "2022-11-22", "2024-12-31"),
+)
+
+# Alternativa rechazada para el estado: variables en NIVEL (no estacionarias).
+REJECTED_FAMILY = "rechazada_nivel"
+
+
+def eda_train(bars):
+    """Barras del train del fold usado en el EDA general (fold 4)."""
+    return get_folds()[EDA_FOLD - 1].split(bars)[0]
+
+
+def max_drawdown(close):
+    """Caída máxima desde un máximo previo (número negativo, p. ej. -0.84)."""
+    return float((close / close.cummax() - 1).min())
+
+
+def characterize_regimes(bars):
+    """Volatilidad, tendencia y drawdown de cada régimen (train del fold 4).
+
+    Volatilidad anualizada = desviación del log-retorno horario x sqrt(24*365)
+    (cripto opera 24/7). Tendencia = retorno total y log-retorno anualizado.
+    """
+    rows = []
+    for name, start, end in REGIMES:
+        part = bars.loc[start:end]
+        ret = np.log(part["close"]).diff().dropna()
+        years = (part.index[-1] - part.index[0]) / pd.Timedelta(days=365)
+        total_log = float(np.log(part["close"].iloc[-1] / part["close"].iloc[0]))
+        rows.append(
+            {
+                "regimen": name,
+                "inicio": start,
+                "fin": end,
+                "dias": (part.index[-1] - part.index[0]).days,
+                "precio_inicio": float(part["close"].iloc[0]),
+                "precio_fin": float(part["close"].iloc[-1]),
+                "retorno_total": float(np.expm1(total_log)),
+                "tendencia_log_anual": total_log / years,
+                "vol_anualizada": float(ret.std() * np.sqrt(HOURS_PER_YEAR)),
+                "max_drawdown": max_drawdown(part["close"]),
+                "curtosis_exceso": float(stats.kurtosis(ret)),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def return_distribution_stats(returns):
+    """Asimetría, curtosis en exceso, Jarque-Bera y colas frente a una normal."""
+    r = returns.dropna()
+    z = (r - r.mean()) / r.std()
+    jb = stats.jarque_bera(r)
+    return {
+        "n": len(r),
+        "media": float(r.mean()),
+        "desviacion": float(r.std()),
+        "asimetria": float(stats.skew(r)),
+        "curtosis_exceso": float(stats.kurtosis(r)),
+        "jarque_bera_p": float(jb.pvalue),
+        "frac_mas_de_4_sd": float((z.abs() > 4).mean()),
+        "frac_normal_mas_de_4_sd": float(2 * stats.norm.sf(4)),
+    }
+
+
+def autocorrelation_summary(returns, nlags=LONG_WINDOW):
+    """ACF de r y de |r| con su banda de 95% y cuántos rezagos la superan."""
+    r = returns.dropna()
+    band = 1.96 / np.sqrt(len(r))
+    acf_ret = acf(r, nlags=nlags, fft=True)
+    acf_abs = acf(r.abs(), nlags=nlags, fft=True)
+    return {
+        "acf_ret": acf_ret,
+        "acf_abs": acf_abs,
+        "banda_95": band,
+        "rezagos_signif_ret": int((np.abs(acf_ret[1:]) > band).sum()),
+        "rezagos_signif_abs": int((np.abs(acf_abs[1:]) > band).sum()),
+    }
+
+
+def stationarity_tests(series):
+    """ADF (H0: raíz unitaria) y KPSS (H0: estacionaria) de una serie.
+
+    ADF con constante, rezagos elegidos por AIC hasta 24. KPSS con constante y
+    rezagos automáticos; statsmodels solo tabula su p-valor entre 0.01 y 0.10,
+    así que 0.01 significa "<= 0.01" y 0.10 significa ">= 0.10".
+    Estacionaria = ADF rechaza (p < 0.05) y KPSS no rechaza (p > 0.05).
+    """
+    x = series.dropna().to_numpy()
+    adf_stat, adf_p = adfuller(x, maxlag=24, autolag="AIC")[:2]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", InterpolationWarning)
+        kpss_stat, kpss_p = kpss(x, regression="c", nlags="auto")[:2]
+    return {
+        "adf_stat": float(adf_stat),
+        "adf_pvalue": float(adf_p),
+        "kpss_stat": float(kpss_stat),
+        "kpss_pvalue": float(kpss_p),
+        "estacionaria": bool(adf_p < 0.05 and kpss_p > 0.05),
+    }
+
+
+def stationarity_table(bars):
+    """ADF y KPSS de precio, log-precio, retorno y volatilidad en el train de cada fold."""
+    rows = []
+    for fold in get_folds():
+        train = fold.split(bars)[0]
+        log_close = np.log(train["close"])
+        ret_1 = log_close.diff()
+        candidates = {
+            "precio": train["close"],
+            "log_precio": log_close,
+            "retorno_1h": ret_1,
+            "volatilidad_24h": ret_1.rolling(SHORT_WINDOW).std(),
+        }
+        for name, series in candidates.items():
+            rows.append({"fold": fold.number, "periodo": "train", "serie": name, **stationarity_tests(series)})
+    return pd.DataFrame(rows)
+
+
+def build_targets(bars, horizons=HORIZONS):
+    """Objetivo: log-retorno futuro a h barras desde la apertura de la siguiente barra.
+
+    target_h(t) = log(close_{t+h} / open_{t+1}): se decide al cierre de t, se
+    entra a la apertura de t+1 y se mide hasta el cierre de t+h. Queda NaN si
+    alguna barra entre t+1 y t+h tiene ``gap`` (el retorno abarcaría horas
+    faltantes) o si t+h cae fuera de ``bars``; al pasar solo el train de un
+    fold, el objetivo nunca usa datos posteriores al fin del train.
+    """
+    entry = bars["open"].shift(-1)
+    targets = {}
+    for h in horizons:
+        gap_ahead = bars["gap"].astype(float).rolling(h).max().shift(-h)
+        target = np.log(bars["close"].shift(-h) / entry)
+        targets[f"target_h{h}"] = target.where(gap_ahead == 0)
+    return pd.DataFrame(targets, index=bars.index)
+
+
+def rejected_level_features(bars):
+    """Alternativa rechazada: precio, log-precio y volumen en nivel (sin transformar)."""
+    return pd.DataFrame(
+        {"close": bars["close"], "log_close": np.log(bars["close"]), "volume": bars["volume"]},
+        index=bars.index,
+    )
+
+
+def target_relations(feature, target, rng_seed=SEED):
+    """Pearson, Spearman, información mutua y MI de referencia con objetivo barajado.
+
+    La MI (k vecinos, sklearn) mide cualquier dependencia, también la de la
+    magnitud del movimiento (no solo su signo). ``mi_null`` es la MI con el
+    objetivo barajado al azar (semilla 42): el nivel que se obtiene por puro
+    ruido de estimación.
+    """
+    valid = feature.notna() & target.notna()
+    x, y = feature[valid].to_numpy(), target[valid].to_numpy()
+    shuffled = np.random.default_rng(rng_seed).permutation(y)
+    mi, mi_null = (
+        mutual_info_regression(x.reshape(-1, 1), t, random_state=rng_seed)[0] for t in (y, shuffled)
+    )
+    return {
+        "n": int(valid.sum()),
+        "pearson": float(np.corrcoef(x, y)[0, 1]),
+        "spearman": float(stats.spearmanr(x, y).statistic),
+        "mi": float(mi),
+        "mi_null": float(mi_null),
+    }
+
+
+def feature_analysis(bars, fold):
+    """Relación de cada variable con el objetivo (h = 1, 4, 24) en el train del fold.
+
+    Incluye las 21 variables del estado (por familia) y la alternativa
+    rechazada en nivel. Por variable: ADF, KPSS, autocorrelación de rezago 1 y,
+    por horizonte, Pearson, Spearman, MI y MI de referencia. Todo se calcula
+    solo con filas del train del fold; las variables son causales, así que
+    calcularlas sobre la serie completa y luego recortar al train da lo mismo.
+    """
+    features, families = build_features(bars)
+    families = {**families, REJECTED_FAMILY: list(rejected_level_features(bars).columns)}
+    candidates = pd.concat([features, rejected_level_features(bars)], axis=1)
+    train_bars = fold.split(bars)[0]
+    train = candidates.loc[train_bars.index].iloc[LONG_WINDOW:]  # sin calentamiento
+    targets = build_targets(train_bars).loc[train.index]
+    rows = []
+    for family, columns in families.items():
+        for column in columns:
+            row = {
+                "fold": fold.number,
+                "periodo": "train",
+                "train_inicio": str(train.index[0]),
+                "train_fin": str(train.index[-1]),
+                "familia": family,
+                "variable": column,
+                **stationarity_tests(train[column]),
+                "acf_lag1": float(train[column].autocorr(1)),
+            }
+            for h in HORIZONS:
+                relations = target_relations(train[column], targets[f"target_h{h}"])
+                row.update({f"{key}_h{h}": value for key, value in relations.items()})
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def write_feature_analysis(bars, out_dir=ARTIFACTS_DIR):
+    """Escribe artifacts/feature_analysis_fold_{1,2,3,4}.csv y devuelve sus rutas."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for fold in get_folds():
+        path = out_dir / f"feature_analysis_fold_{fold.number}.csv"
+        feature_analysis(bars, fold).to_csv(path, index=False, encoding="utf-8")
+        paths.append(path)
+    return paths
