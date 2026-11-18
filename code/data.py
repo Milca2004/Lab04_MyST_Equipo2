@@ -32,6 +32,7 @@ Supuestos y hallazgos del archivo de Canvas (verificados corriendo código):
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -112,6 +113,172 @@ def get_folds():
         Fold(3, ("2017-08", "2023-12"), ("2024", "2024"), ("2025", "2025")),
         Fold(4, ("2017-08", "2024-12"), ("2025", "2025"), ("2026-01", "2026-04")),
     ]
+
+
+SHORT_WINDOW = 24
+LONG_WINDOW = 168
+RSI_WINDOW = 14
+TREND_HALF_LIFE_HOURS = 24
+
+
+def log_return_features(close):
+    """Familia retornos: log-retorno a 1, 4, 24 y 168 barras."""
+    log_close = np.log(close)
+    return pd.DataFrame(
+        {f"ret_{k}": log_close.diff(k) for k in (1, 4, SHORT_WINDOW, LONG_WINDOW)}
+    )
+
+
+def volatility_features(bars):
+    """Familia volatilidad: desviación móvil del retorno, rango de la barra y Parkinson."""
+    ret_1 = np.log(bars["close"]).diff()
+    log_range = np.log(bars["high"] / bars["low"])
+    parkinson = np.sqrt((log_range**2).rolling(SHORT_WINDOW).mean() / (4 * np.log(2)))
+    return pd.DataFrame(
+        {
+            "vol_24": ret_1.rolling(SHORT_WINDOW).std(),
+            "vol_168": ret_1.rolling(LONG_WINDOW).std(),
+            "range_1": log_range,
+            "parkinson_24": parkinson,
+        }
+    )
+
+
+def volume_features(bars):
+    """Familia volumen: log-volumen y log-operaciones contra su media móvil.
+
+    Se usa log1p porque hay 4 barras con volumen cero.
+    """
+    log_volume = np.log1p(bars["volume"])
+    log_trades = np.log1p(bars["trades"])
+    return pd.DataFrame(
+        {
+            "volume_ratio_24": log_volume - log_volume.rolling(SHORT_WINDOW).mean(),
+            "volume_ratio_168": log_volume - log_volume.rolling(LONG_WINDOW).mean(),
+            "trades_ratio_24": log_trades - log_trades.rolling(SHORT_WINDOW).mean(),
+        }
+    )
+
+
+def ema(series, span):
+    """Media móvil exponencial causal (recursiva, sin ajuste de sesgo inicial)."""
+    return series.ewm(span=span, adjust=False, min_periods=span).mean()
+
+
+def rsi(close, window=RSI_WINDOW):
+    """RSI de Wilder entre 0 y 100 (suavizado exponencial con alpha = 1/window)."""
+    change = close.diff()
+    smooth = {"adjust": False, "alpha": 1 / window, "min_periods": window}
+    gain = change.clip(lower=0).ewm(**smooth).mean()
+    loss = (-change).clip(lower=0).ewm(**smooth).mean()
+    return 100 - 100 / (1 + gain / loss)
+
+
+def trend_momentum_features(close):
+    """Familia tendencia/momentum: distancia del log-precio a su EMA y RSI."""
+    log_close = np.log(close)
+    return pd.DataFrame(
+        {
+            "dist_ema_24": log_close - ema(log_close, SHORT_WINDOW),
+            "dist_ema_168": log_close - ema(log_close, LONG_WINDOW),
+            "rsi_14": rsi(close),
+        }
+    )
+
+
+def time_features(index):
+    """Familia tiempo: hora del día y día de la semana (UTC) en seno y coseno."""
+    hour = index.hour.to_numpy()
+    day = index.dayofweek.to_numpy()
+    return pd.DataFrame(
+        {
+            "hour_sin": np.sin(2 * np.pi * hour / 24),
+            "hour_cos": np.cos(2 * np.pi * hour / 24),
+            "dow_sin": np.sin(2 * np.pi * day / 7),
+            "dow_cos": np.cos(2 * np.pi * day / 7),
+        },
+        index=index,
+    )
+
+
+def kalman_trend(ret_1, noise_var, hours_elapsed, half_life=TREND_HALF_LIFE_HOURS):
+    """Filtro de Kalman de la tendencia latente mu_t (log-retorno esperado por hora).
+
+    Modelo (por hora de reloj):
+        estado:      mu_t = mu_{t-1} + eta,   Var(eta) = q * R_t por hora
+        observación: y_t = mu_t + eps,        Var(eps) = R_t
+    donde y_t es el log-retorno horario y R_t = vol_24_t**2 la varianza
+    horaria del ruido.
+
+    Huecos: en una barra con hueco de dt horas solo se hace la predicción
+    (la varianza crece q * R_t * dt y la media no cambia); su retorno, que
+    abarca varias horas en las que mu pudo moverse, no se usa como medición.
+    Así el hueco eleva la incertidumbre en lugar de rellenarse.
+
+    q no se estima con datos: se fija para que la ganancia estacionaria sin
+    huecos, k, olvide la mitad de la información en ``half_life`` horas
+    (k = 1 - 0.5**(1/half_life) y q = k**2 / (1 - k)).
+
+    Devuelve (media, desviación estándar) posteriores de mu_t; NaN hasta que
+    existe R_t. Cada paso usa solo datos hasta t (causal).
+    """
+    gain = 1 - 0.5 ** (1 / half_life)
+    q = gain**2 / (1 - gain)
+    y, r, dt = (np.asarray(a, dtype=float) for a in (ret_1, noise_var, hours_elapsed))
+    mean = np.full(len(y), np.nan)
+    var = np.full(len(y), np.nan)
+    mu, p = 0.0, np.nan
+    for t in range(len(y)):
+        if not (np.isfinite(r[t]) and np.isfinite(y[t])):
+            continue
+        p = r[t] if np.isnan(p) else p + q * r[t] * dt[t]
+        if dt[t] == 1:
+            k = p / (p + r[t])
+            mu = mu + k * (y[t] - mu)
+            p = (1 - k) * p
+        mean[t], var[t] = mu, p
+    return mean, np.sqrt(var)
+
+
+def belief_features(bars):
+    """Familia creencia: tendencia estimada por Kalman, su incertidumbre y su razón."""
+    ret_1 = np.log(bars["close"]).diff()
+    noise_var = ret_1.rolling(SHORT_WINDOW).var()
+    hours = bars.index.to_series().diff() / pd.Timedelta(hours=1)
+    mean, std = kalman_trend(ret_1, noise_var, hours)
+    return pd.DataFrame(
+        {"trend_mean": mean, "trend_std": std, "trend_snr": mean / std},
+        index=bars.index,
+    )
+
+
+def build_features(bars):
+    """Variables causales del estado de información y sus familias.
+
+    La fila t usa solo datos hasta el cierre de la barra t (se verifica en
+    tests/test_causality.py). Devuelve ``(features, families)``, con
+    ``families = {familia: [columnas]}`` para la ablación por familia.
+
+    Huecos: las ventanas móviles cuentan BARRAS OBSERVADAS, no horas de reloj.
+    Una ventana que cruza un hueco cubre más tiempo del nominal, y el retorno
+    de una barra con ``gap`` abarca varias horas. No se rellena ningún precio;
+    ``gap_report`` cuenta cuántas filas tienen un hueco dentro de su ventana.
+    El filtro de la familia creencia sí usa las horas reales transcurridas.
+
+    Calentamiento: las primeras 168 barras (2017-08) quedan con NaN porque
+    sus ventanas aún no están completas.
+    """
+    groups = {
+        "retornos": log_return_features(bars["close"]),
+        "volatilidad": volatility_features(bars),
+        "volumen": volume_features(bars),
+        "tendencia_momentum": trend_momentum_features(bars["close"]),
+        "tiempo": time_features(bars.index),
+        "creencia": belief_features(bars),
+    }
+    features = pd.concat(groups.values(), axis=1)
+    families = {name: list(frame.columns) for name, frame in groups.items()}
+    return features, families
 
 
 def cleaning_summary(raw, bars):
