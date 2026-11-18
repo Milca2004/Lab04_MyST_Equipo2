@@ -398,10 +398,13 @@ EDA_FOLD = 4  # el train del fold 4 (2017-08 a 2024-12) contiene a los demás
 HORIZONS = (1, 4, 24)
 HOURS_PER_YEAR = 24 * 365
 
-# Regímenes del train del fold 4. Las fronteras son los puntos de giro del
-# cierre diario con oscilaciones de al menos 60% (máximos y mínimos del
-# periodo, verificados en el EDA); se omitió el rebote de un mes de
-# 2018-02-05 a 2018-03-04 por ser ruido dentro del mercado bajista de 2018.
+# Regímenes del train del fold 4. Las fronteras son los puntos de giro que
+# da un zigzag de 60% sobre el cierre diario (UTC) del train del fold 4,
+# calculado durante el desarrollo: máximos 2017-12-16, 2019-06-26 y
+# 2021-11-08; mínimos 2018-12-15, 2020-03-12 y 2022-11-21. Se omitió el
+# rebote de un mes de 2018-02-05 a 2018-03-04 (también lo marca el zigzag)
+# por ser ruido dentro del mercado bajista de 2018. Los regímenes alternan
+# alcista y bajista (ver el signo de retorno_total en characterize_regimes).
 REGIMES = (
     ("Burbuja 2017", "2017-08-17", "2017-12-16"),
     ("Invierno cripto 2018", "2017-12-17", "2018-12-15"),
