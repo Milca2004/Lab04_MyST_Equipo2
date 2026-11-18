@@ -281,6 +281,42 @@ def build_features(bars):
     return features, families
 
 
+class Normalizer:
+    """Escalado robusto ajustado SOLO con el train de un fold (un objeto por fold).
+
+    z = (x - mediana_train) / IQR_train, recortado a [-clip, clip].
+    Se usan mediana e IQR (no media y desviación) porque los retornos tienen
+    colas gordas y unos pocos extremos inflarían la desviación estándar.
+    Solo se escalan ``columns``; las demás pasan sin cambio (p. ej. las de
+    tiempo, que ya están en [-1, 1]). Los estadísticos se congelan en
+    ``fit`` y se aplican sin modificación a validación y prueba.
+    """
+
+    def __init__(self, columns, clip=5.0):
+        self.columns = list(columns)
+        self.clip = clip
+        self.median_ = None
+        self.iqr_ = None
+
+    def fit(self, train):
+        """Calcula mediana e IQR de cada columna con el train del fold."""
+        values = train[self.columns]
+        self.median_ = values.median()
+        self.iqr_ = values.quantile(0.75) - values.quantile(0.25)
+        if (self.iqr_ <= 0).any():
+            raise ValueError(f"IQR cero en: {list(self.iqr_[self.iqr_ <= 0].index)}")
+        return self
+
+    def transform(self, x):
+        """Aplica los estadísticos congelados del train a cualquier periodo."""
+        if self.median_ is None:
+            raise RuntimeError("Normalizer.transform antes de fit.")
+        scaled = x.copy()
+        z = (x[self.columns] - self.median_) / self.iqr_
+        scaled[self.columns] = z.clip(-self.clip, self.clip)
+        return scaled
+
+
 def cleaning_summary(raw, bars):
     """Cifras de la limpieza para el reporte (todo el archivo, sin partir en folds)."""
     timestamps = raw["date"]
