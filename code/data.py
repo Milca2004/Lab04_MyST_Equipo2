@@ -22,7 +22,10 @@ Supuestos y hallazgos del archivo de Canvas (verificados corriendo código):
   (hora de recolección). Con floor su cierre se conoce a las 04:00 (sin
   fuga); con ceil chocaría con la barra existente de las 04:00.
 * Huecos: NO se rellenan. La columna booleana ``gap`` marca las barras cuya
-  barra anterior (una hora antes) falta. Contra la malla horaria completa
+  barra anterior (una hora antes) falta y ``gap_hours`` dice cuántas horas
+  faltan justo antes de cada barra (0 si no falta ninguna), para distinguir
+  la barra de 00:00 que falta casi a diario desde abril de 2025 (hueco de
+  1 hora) de los huecos largos (hasta 145 horas). Contra la malla horaria completa
   faltan 1,157 horas antes del floor y 1,114 después (las 43 horas de 2018
   quedan cubiertas), repartidas en 376 huecos. Desde abril de 2025 falta casi
   a diario la barra de 00:00 y hay huecos largos (145 h en julio de 2025).
@@ -62,7 +65,8 @@ def clean_bars(raw):
     """Convierte el CSV crudo en barras horarias limpias.
 
     Pasos: redondea la fecha hacia abajo a la hora, elimina filas repetidas
-    (misma fecha y OHLCV), ordena de forma ascendente y marca ``gap``.
+    (misma fecha y OHLCV), ordena de forma ascendente y marca los huecos
+    con ``gap_hours`` (horas faltantes antes de la barra) y ``gap``.
     Falla si dos barras distintas caen en la misma hora (no se elige una en
     silencio).
     """
@@ -72,7 +76,9 @@ def clean_bars(raw):
     if bars["date"].duplicated().any():
         raise ValueError("Hay horas con dos barras de contenido distinto.")
     bars = bars.set_index("date")
-    bars["gap"] = bars.index.to_series().diff().gt(ONE_HOUR).to_numpy()
+    hours_since_previous = bars.index.to_series().diff() / ONE_HOUR
+    bars["gap_hours"] = (hours_since_previous.fillna(1) - 1).astype(int).to_numpy()
+    bars["gap"] = bars["gap_hours"] > 0
     return bars
 
 
@@ -81,7 +87,8 @@ def load_clean(path=DATA_PATH):
 
     Índice ``date`` (apertura de la barra, UTC) en orden ascendente y sin
     duplicados. Columnas: open, high, low, close, volume (BTC), volume_usdt,
-    trades y ``gap`` (True si la barra anterior falta).
+    trades, ``gap_hours`` (horas faltantes justo antes de la barra, 0 si no
+    falta ninguna) y ``gap`` (True si ``gap_hours`` > 0).
     """
     return clean_bars(read_raw(path))
 
@@ -244,8 +251,7 @@ def belief_features(bars):
     """Familia creencia: tendencia estimada por Kalman, su incertidumbre y su razón."""
     ret_1 = np.log(bars["close"]).diff()
     noise_var = ret_1.rolling(SHORT_WINDOW).var()
-    hours = bars.index.to_series().diff() / pd.Timedelta(hours=1)
-    mean, std = kalman_trend(ret_1, noise_var, hours)
+    mean, std = kalman_trend(ret_1, noise_var, bars["gap_hours"] + 1)
     return pd.DataFrame(
         {"trend_mean": mean, "trend_std": std, "trend_snr": mean / std},
         index=bars.index,
@@ -329,8 +335,9 @@ def gap_report(bars):
 
     Columnas: barras observadas, horas faltantes contra la malla horaria del
     periodo (sin pasar del primer y último dato del archivo), barras con
-    ``gap`` y filas cuya ventana de 24 o 168 barras contiene al menos un
-    ``gap`` (indicadores móviles que cruzan un hueco).
+    ``gap``, número de huecos por longitud (1 hora, 2 a 3 horas, más de 3)
+    y filas cuya ventana de 24 o 168 barras contiene al menos un ``gap``
+    (indicadores móviles que cruzan un hueco).
     """
     in_window = {w: bars["gap"].rolling(w, min_periods=1).max().astype(bool) for w in (SHORT_WINDOW, LONG_WINDOW)}
     rows = []
@@ -346,6 +353,10 @@ def gap_report(bars):
                     "barras": len(part),
                     "horas_faltantes": len(pd.date_range(first, last, freq="h")) - len(part),
                     "barras_con_gap": int(part["gap"].sum()),
+                    "huecos_1h": int((part["gap_hours"] == 1).sum()),
+                    "huecos_2a3h": int(part["gap_hours"].between(2, 3).sum()),
+                    "huecos_mas_3h": int((part["gap_hours"] > 3).sum()),
+                    "hueco_mas_largo_h": int(part["gap_hours"].max()),
                     "filas_hueco_en_ventana_24": int(in_window[SHORT_WINDOW].loc[first:last].sum()),
                     "filas_hueco_en_ventana_168": int(in_window[LONG_WINDOW].loc[first:last].sum()),
                 }
