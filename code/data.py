@@ -29,6 +29,7 @@ Supuestos y hallazgos del archivo de Canvas (verificados corriendo código):
 * 4 barras con volumen cero (2019-06-07, 2020-12-21, 2021-02-11,
   2023-03-24); se conservan.
 """
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
@@ -82,6 +83,35 @@ def load_clean(path=DATA_PATH):
     trades y ``gap`` (True si la barra anterior falta).
     """
     return clean_bars(read_raw(path))
+
+
+@dataclass(frozen=True)
+class Fold:
+    """Un fold walk-forward. Cada periodo es (inicio, fin) en texto, ambos inclusivos.
+
+    Los textos usan la selección parcial de pandas: ``("2022", "2022")`` es
+    todo el año 2022 y ``("2017-08", "2021-12")`` va del primer día de
+    agosto de 2017 al último de diciembre de 2021.
+    """
+
+    number: int
+    train: tuple
+    valid: tuple
+    test: tuple
+
+    def split(self, df):
+        """Parte ``df`` (índice de fechas) en (train, valid, test) sin traslape."""
+        return tuple(df.loc[start:end] for start, end in (self.train, self.valid, self.test))
+
+
+def get_folds():
+    """Los 4 folds de ventana expansiva del enunciado (sección 3.6)."""
+    return [
+        Fold(1, ("2017-08", "2021-12"), ("2022", "2022"), ("2023", "2023")),
+        Fold(2, ("2017-08", "2022-12"), ("2023", "2023"), ("2024", "2024")),
+        Fold(3, ("2017-08", "2023-12"), ("2024", "2024"), ("2025", "2025")),
+        Fold(4, ("2017-08", "2024-12"), ("2025", "2025"), ("2026-01", "2026-04")),
+    ]
 
 
 def cleaning_summary(raw, bars):
