@@ -73,6 +73,6 @@ El archivo `data/Binance_BTCUSDT_1h.csv` es una copia del archivo publicado en C
 
 ## Uso de asistencia de IA
 
-- **Milca:**
+- **Milca:** usé Claude Code como asistente para escribir `code/data.py`, mis funciones de `code/plots.py` y `tests/test_causality.py`, y para generar `artifacts/btcusdt_eda.pdf` y `artifacts/feature_analysis_fold_{1,2,3,4}.csv`. Las cifras de limpieza del CSV, los folds y los huecos se verificaron corriendo el código.
 - **Arturo:**
 - **Paula:**
