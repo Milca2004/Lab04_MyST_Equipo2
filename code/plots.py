@@ -78,9 +78,9 @@ def regime_handles():
     return [Patch(color=BULL_FILL, label="Régimen alcista"), Patch(color=BEAR_FILL, label="Régimen bajista")]
 
 
-def legend_with_regimes(ax, loc):
+def legend_with_regimes(ax, loc, ncol=1):
     """Leyenda con las series del eje más los regímenes, sobre fondo blanco para que se lean."""
-    ax.legend(handles=[*ax.get_legend_handles_labels()[0], *regime_handles()], loc=loc,
+    ax.legend(handles=[*ax.get_legend_handles_labels()[0], *regime_handles()], loc=loc, ncol=ncol,
               frameon=True, facecolor="white", edgecolor=GRID, framealpha=1)
 
 
@@ -141,8 +141,7 @@ def plot_drawdown_volatility(fig, bars, regimes):
     top.set_ylabel("Drawdown (%)")
     top.set_title("Drawdown · train del fold 4", loc="left")
     top.set_ylim(-118, 5)
-    top.legend(handles=[*top.get_legend_handles_labels()[0], *regime_handles()], loc="lower center", ncol=3,
-               frameon=True, facecolor="white", edgecolor=GRID, framealpha=1)
+    legend_with_regimes(top, "lower center", ncol=3)
     bottom.plot(vol.index, vol * 100, color=SERIES[0], lw=1.0, label="Volatilidad móvil 168 h, anualizada")
     bottom.set_ylabel("Volatilidad anualizada (%)")
     bottom.set_xlabel("Fecha (UTC)")
@@ -264,17 +263,54 @@ def plot_feature_information(fig, analysis):
     ax.legend(loc="upper left")
 
 
+def plot_data_quality(fig, summary, gaps):
+    """Tablas de limpieza (archivo completo) y de huecos por fold y periodo.
+
+    Solo cuenta barras y huecos; no usa precios ni retornos de valid/test.
+    """
+    top = fig.add_axes([0.04, 0.6, 0.45, 0.28])
+    top.axis("off")
+    top.set_title("Limpieza del archivo de Canvas (archivo completo)", loc="left")
+    items = [
+        ("Filas del archivo", f"{summary['filas_crudas']:,}"),
+        ("Filas repetidas eliminadas", f"{summary['duplicados_eliminados']:,}"),
+        ("Barras redondeadas a la hora (2018)", f"{summary['barras_redondeadas_a_la_hora']:,}"),
+        ("Barras únicas", f"{summary['barras_unicas']:,}"),
+        ("Horas faltantes (malla completa)", f"{summary['horas_faltantes']:,}"),
+        ("Barras con hueco previo", f"{summary['barras_con_gap']:,}"),
+        ("Barras con volumen cero", f"{summary['barras_volumen_cero']:,}"),
+    ]
+    table = top.table(cellText=[list(item) for item in items], colLabels=["Concepto", "Valor"], loc="upper left", cellLoc="left")
+    style_table(table, [0.75, 0.25], font_size=9.5, row_height=1.25)
+
+    bottom = fig.add_axes([0.04, 0.17, 0.92, 0.38])
+    bottom.axis("off")
+    bottom.set_title("Huecos por fold y periodo (conteo de barras)", loc="left")
+    header = ["Fold", "Periodo", "Barras", "Horas\nfaltantes", "Huecos\n1 h", "Huecos\n2-3 h", "Huecos\n> 3 h",
+              "Hueco más\nlargo (h)", "Filas con hueco\nen ventana 168"]
+    cells = [[r.fold, r.periodo, f"{r.barras:,}", r.horas_faltantes, r.huecos_1h, r.huecos_2a3h, r.huecos_mas_3h,
+              r.hueco_mas_largo_h, f"{r.filas_hueco_en_ventana_168:,} ({r.filas_hueco_en_ventana_168 / r.barras:.0%})"]
+             for r in gaps.itertuples()]
+    table = bottom.table(cellText=cells, colLabels=header, loc="upper center", cellLoc="center")
+    style_table(table, [0.06, 0.08, 0.09, 0.1, 0.09, 0.09, 0.09, 0.11, 0.17], font_size=9.5, row_height=1.3)
+    for col in range(len(header)):
+        table[0, col].set_height(table[0, col].get_height() * 2)
+
+
 def format_pvalue(p):
     """Texto de un p-valor; los que no se distinguen de cero se reportan como "< 1e-300"."""
     return "< 1e-300" if p < 1e-300 else f"= {p:.1g}"
 
 
-def write_eda_pdf(bars, path=data.ARTIFACTS_DIR / "btcusdt_eda.pdf"):
+def write_eda_pdf(bars, path=data.ARTIFACTS_DIR / "btcusdt_eda.pdf", raw=None):
     """Escribe artifacts/btcusdt_eda.pdf con datos SOLO de entrenamiento.
 
     EDA general sobre el train del fold 4 (2017-08 a 2024-12, contiene a los
     demás trains); la tabla de estacionariedad cubre el train de los 4 folds.
-    Cada hoja termina con la decisión de diseño que sustenta.
+    Cada hoja termina con la decisión de diseño que sustenta. La última hoja
+    (calidad de datos) solo cuenta barras y huecos por periodo. ``raw`` es el
+    CSV crudo (``data.read_raw()``); si no se pasa, se lee del repo. Sin fecha
+    de creación en los metadatos, para que repetir la corrida dé el mismo archivo.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -285,8 +321,10 @@ def write_eda_pdf(bars, path=data.ARTIFACTS_DIR / "btcusdt_eda.pdf"):
     acf_summary = data.autocorrelation_summary(returns)
     stationarity = data.stationarity_table(bars)
     analysis = data.feature_analysis(bars, data.get_folds()[data.EDA_FOLD - 1])
+    summary = data.cleaning_summary(data.read_raw() if raw is None else raw, bars)
+    gaps = data.gap_report(bars)
 
-    with PdfPages(path) as pdf:
+    with PdfPages(path, metadata={"CreationDate": None}) as pdf:
         fig = new_page("1. Regímenes de BTCUSDT")
         plot_price_regimes(fig, train, regimes)
         add_design_note(fig, f"el precio pasa de {train['close'].iloc[0]:,.0f} a {train['close'].iloc[-1]:,.0f} USDT "
@@ -352,5 +390,15 @@ def write_eda_pdf(bars, path=data.ARTIFACTS_DIR / "btcusdt_eda.pdf"):
         add_design_note(fig, "volatilidad y creencia aportan la mayor MI (sobre todo en la magnitud del movimiento); tiempo y volumen quedan "
                              f"cerca del ruido. Las variables en nivel muestran MI alta a 24 h (hasta {rejected['mi_h24'].max():.3f}) pero no son "
                              "estacionarias: esa MI es espuria (el nivel funciona como reloj del régimen) y por eso se rechazan.")
+        pdf.savefig(fig)
+        plt.close(fig)
+
+        fig = new_page("9. Calidad de datos: limpieza y huecos")
+        plot_data_quality(fig, summary, gaps)
+        worst = gaps.loc[gaps["filas_hueco_en_ventana_168"].div(gaps["barras"]).idxmax()]
+        add_design_note(fig, "los huecos NO se rellenan: la columna gap_hours los marca y las ventanas móviles cuentan barras observadas. "
+                             f"El fold {worst['fold']} ({worst['periodo']}) tiene un hueco dentro de la ventana de 168 barras en "
+                             f"{worst['filas_hueco_en_ventana_168'] / worst['barras']:.0%} de sus filas; 2025 y 2026 deben "
+                             "leerse con esa salvedad al comparar folds, y el simulador debe distinguir huecos de 1 h de huecos largos.")
         pdf.savefig(fig)
         plt.close(fig)
