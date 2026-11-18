@@ -162,14 +162,14 @@ def plot_return_distribution(fig, returns, summary):
     left.set_ylim(bottom=1e-2)
     left.set_xlabel("Log-retorno horario (recortado a los percentiles 0.05 y 99.95)")
     left.set_ylabel("Densidad (escala log)")
-    left.set_title(f"Distribución · curtosis en exceso = {summary['curtosis_exceso']:.1f}", loc="left")
+    left.set_title(f"Distribución · curtosis en exceso = {summary['curtosis_exceso']:.1f} · train fold 4", loc="left")
     left.legend(loc="upper left", fontsize=9.5)
     (theoretical, ordered), _ = stats.probplot((r - r.mean()) / r.std(), dist="norm")
     right.plot(theoretical, ordered, ".", color=SERIES[0], ms=3, label="Cuantiles observados")
     right.plot(theoretical, theoretical, color=SERIES[1], lw=2, label="Referencia normal")
     right.set_xlabel("Cuantil teórico normal (desviaciones)")
     right.set_ylabel("Cuantil observado (desviaciones)")
-    right.set_title("Gráfica Q-Q contra la normal", loc="left")
+    right.set_title("Gráfica Q-Q contra la normal · train fold 4", loc="left")
     right.legend(loc="upper left")
 
 
@@ -237,7 +237,7 @@ def plot_intraday_seasonality(fig, bars):
     right.axhline(abs_ret.mean(), color=SERIES[1], lw=2, label="Promedio general")
     right.set_xlabel("Día de la semana (UTC)")
     right.set_ylabel("Retorno absoluto medio (%)")
-    right.set_title("Por día de la semana", loc="left")
+    right.set_title("Por día de la semana · train fold 4", loc="left")
     right.set_ylim(0, by_day.max() * 1.3)
     right.legend(loc="upper left", fontsize=9.5)
     return by_hour, by_day
