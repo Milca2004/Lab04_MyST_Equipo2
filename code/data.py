@@ -317,6 +317,42 @@ class Normalizer:
         return scaled
 
 
+def period_bounds(start, end, tz="UTC"):
+    """Primera y última hora nominal de un periodo dado en texto ("2022", "2021-12")."""
+    first = pd.Period(start).start_time.tz_localize(tz)
+    last = pd.Period(end).end_time.floor("h").tz_localize(tz)
+    return first, last
+
+
+def gap_report(bars):
+    """Cuántas barras afecta un hueco, por fold y periodo (train/valid/test).
+
+    Columnas: barras observadas, horas faltantes contra la malla horaria del
+    periodo (sin pasar del primer y último dato del archivo), barras con
+    ``gap`` y filas cuya ventana de 24 o 168 barras contiene al menos un
+    ``gap`` (indicadores móviles que cruzan un hueco).
+    """
+    in_window = {w: bars["gap"].rolling(w, min_periods=1).max().astype(bool) for w in (SHORT_WINDOW, LONG_WINDOW)}
+    rows = []
+    for fold in get_folds():
+        for name, (start, end) in zip(("train", "valid", "test"), (fold.train, fold.valid, fold.test)):
+            first, last = period_bounds(start, end)
+            first, last = max(first, bars.index[0]), min(last, bars.index[-1])
+            part = bars.loc[first:last]
+            rows.append(
+                {
+                    "fold": fold.number,
+                    "periodo": name,
+                    "barras": len(part),
+                    "horas_faltantes": len(pd.date_range(first, last, freq="h")) - len(part),
+                    "barras_con_gap": int(part["gap"].sum()),
+                    "filas_hueco_en_ventana_24": int(in_window[SHORT_WINDOW].loc[first:last].sum()),
+                    "filas_hueco_en_ventana_168": int(in_window[LONG_WINDOW].loc[first:last].sum()),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def cleaning_summary(raw, bars):
     """Cifras de la limpieza para el reporte (todo el archivo, sin partir en folds)."""
     timestamps = raw["date"]
