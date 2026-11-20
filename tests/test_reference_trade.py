@@ -120,6 +120,29 @@ def test_barra_ambigua_segun_supuesto_intrabarra(priority, reason, exit_price, n
     assert trade["pnl_neto"] == pytest.approx(net, rel=1e-9)
 
 
+def test_variante_por_paso_suma_lo_mismo_que_la_terminal():
+    """Caso horizonte con reward_timing='per_bar': 4 pasos (barras 1-4) que suman 0.14938836000401726.
+
+    Barra 1 (close 100.2): V = 1,000,000 - 1,250 + 10,000 * 0.2 = 1,000,750
+    Barras 2 y 3 (close 100.2): V sin cambio -> contribución 0
+    Barra 4 (salida, close 100.4): V = 1,000,000 + 1,495 = 1,001,495
+    Primera contribución = 100 * log(1,000,750 / 1,000,000) = 0.07497188...
+    """
+    env = E.TradingEnv(make_split(QUIET, close_bar4=100.4), horizon_hours=4,
+                       initial_capital=CAPITAL, reward_timing="per_bar")
+    env.reset(options={"start_index": 0})
+    rewards, infos = [], []
+    for action in (E.ACTION_LONG, E.ACTION_SHORT, E.ACTION_FLAT, E.ACTION_LONG):  # se ignoran tras abrir
+        _, contribution, _, _, info = env.step(action)
+        rewards.append(contribution)
+        infos.append(info)
+    assert rewards[0] == pytest.approx(100 * np.log(1_000_750 / 1_000_000), rel=1e-12)
+    assert rewards[1] == rewards[2] == 0.0
+    assert sum(rewards) == pytest.approx(0.14938836000401726, rel=1e-9)
+    assert [i["operacion"] is None for i in infos] == [True, True, True, False]
+    assert infos[-1]["operacion"]["pnl_neto"] == pytest.approx(1495.0, rel=1e-9)
+
+
 def test_hueco_que_atraviesa_el_stop_se_llena_en_el_open():
     """Sin barra de 02:00 y open de 98.5 a las 03:00: stop llenado en 98.5, peor que el nivel."""
     split = make_split((98.5, 98.9, 98.2, 98.6), drop_bar2=True)

@@ -23,6 +23,25 @@ def test_check_env_sin_advertencias(split):
         check_env(E.make_env(1, split), warn=True, skip_render_check=True)
 
 
+def test_check_env_variante_por_paso():
+    """La variante por paso de la pregunta 3 también pasa check_env sin advertencias."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        check_env(E.make_env(1, "train", reward_timing="per_bar"), warn=True, skip_render_check=True)
+
+
+def test_ablacion_quita_la_familia_y_no_cambia_las_barreras():
+    """drop_families reduce la observación (pregunta 7) sin cambiar el simulador."""
+    full = E.make_env(1, "valid")
+    ablated = E.make_env(1, "valid", drop_families=("volatilidad",))
+    assert ablated.observation_space.shape[0] == full.observation_space.shape[0] - 4
+    assert "vol_24" not in ablated.d.feature_names
+    assert (ablated.d.vol_24 == full.d.vol_24).all()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        check_env(ablated, warn=True, skip_render_check=True)
+
+
 @pytest.mark.parametrize("fold", [1, 2, 3, 4])
 def test_agente_aleatorio_pierde_y_la_bitacora_cuadra(fold):
     """Train completo del fold con la política aleatoria (semilla 42)."""

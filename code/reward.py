@@ -16,8 +16,11 @@ El capital después de la operación es ``capital + pnl_neto``; así la
 identidad contable del enunciado (capital final = capital inicial + suma del
 P&L neto de la bitácora) se cumple por construcción.
 
-La contribución C(S_t, x_t) es TERMINAL: se paga completa en el paso en que
-la operación se cierra (formulación semi-Markov, sección 3.4).
+La contribución C(S_t, x_t) del diseño es TERMINAL: se paga completa en el
+paso en que la operación se cierra (formulación semi-Markov, sección 3.4).
+``per_bar_contributions`` implementa la alternativa por paso (marcada a
+mercado en cada barra) solo para el experimento de la pregunta 3: suma lo
+mismo que la terminal, pero reparte el crédito barra por barra.
 """
 import math
 from dataclasses import dataclass
@@ -68,3 +71,22 @@ def log_return_contribution(capital_before, net_pnl, scale=100.0):
     de PPO y DQN aprenden mejor.
     """
     return scale * math.log1p(net_pnl / capital_before)
+
+
+def per_bar_contributions(capital_before, accounting, side, entry_price, interim_closes, scale=100.0):
+    """Alternativa por paso: contribución de cada barra de la operación, marcada a mercado.
+
+    Valor de la cuenta al cierre de cada barra intermedia k (aún abierta):
+        V_k = capital_antes - costo_entrada + lado * qty * (close_k - precio_entrada)
+    y en la barra de salida V = capital_antes + pnl_neto. La contribución de
+    cada barra es scale * log(V_k / V_{k-1}) con V_{-1} = capital_antes, así
+    que la suma telescopa a ``log_return_contribution`` (mismo total, crédito
+    repartido). El costo de entrada cae entero en la primera barra.
+    ``interim_closes``: closes de las barras entre la entrada y la de salida
+    (sin incluir esta última).
+    """
+    open_value = capital_before - accounting.entry_cost
+    values = [open_value + side * accounting.qty * (close - entry_price) for close in interim_closes]
+    values.append(capital_before + accounting.net_pnl)
+    previous = [capital_before] + values[:-1]
+    return [scale * math.log(v / p) for v, p in zip(values, previous)]

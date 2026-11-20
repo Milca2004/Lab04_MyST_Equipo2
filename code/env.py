@@ -45,6 +45,7 @@ ACTION_FLAT, ACTION_LONG, ACTION_SHORT = 0, 1, 2
 SIDE_BY_ACTION = {ACTION_LONG: 1, ACTION_SHORT: -1}
 SIDE_NAME = {1: "largo", -1: "corto"}
 INTRABAR_PRIORITIES = ("stop_first", "tp_first")
+REWARD_TIMINGS = ("terminal", "per_bar")
 
 
 # ---------------------------------------------------------------------------
@@ -81,22 +82,30 @@ def market_data():
     return bars, features, families
 
 
-def load_split(fold_number, split):
+def load_split(fold_number, split, drop_families=()):
     """Devuelve ``SplitData`` del fold (1-4) y la partición ('train', 'valid', 'test').
 
     Se descartan las filas sin variables completas (las 168 barras de
     calentamiento de 2017-08, solo en train). El Normalizer se ajusta con el
     train del fold y se aplica sin cambios a la partición pedida.
+    ``drop_families`` quita familias de data.build_features de la observación
+    (ablación, pregunta 7); las barreras siguen usando vol_24 aunque se quite
+    la familia volatilidad, para que el simulador no cambie.
     """
     if split not in SPLITS:
         raise ValueError(f"split debe ser uno de {SPLITS}")
     bars, features, families = market_data()
+    unknown = set(drop_families) - set(families)
+    if unknown:
+        raise ValueError(f"Familias desconocidas: {sorted(unknown)}; válidas: {sorted(families)}")
     fold = data.get_folds()[fold_number - 1]
     complete = features.dropna()
     scaled = [c for fam, cols in families.items() if fam not in UNSCALED_FAMILIES for c in cols]
     normalizer = data.Normalizer(scaled).fit(fold.split(complete)[0])
     part = fold.split(complete)[SPLITS.index(split)]
     part_bars = bars.loc[part.index]
+    kept = [c for fam, cols in families.items() if fam not in drop_families for c in cols]
+    observed = normalizer.transform(part)[kept]
     return SplitData(
         fold=fold_number,
         split=split,
@@ -107,8 +116,8 @@ def load_split(fold_number, split):
         close=part_bars["close"].to_numpy(float),
         gap_hours=part_bars["gap_hours"].to_numpy(float),
         vol_24=part["vol_24"].to_numpy(float),
-        features=normalizer.transform(part).to_numpy(np.float32),
-        feature_names=tuple(part.columns),
+        features=observed.to_numpy(np.float32),
+        feature_names=tuple(kept),
     )
 
 
@@ -119,12 +128,13 @@ def load_split(fold_number, split):
 class TradingEnv(gym.Env):
     """Entorno semi-Markov de BTCUSDT horario (una posición a la vez, sin apalancamiento).
 
-    Observación (Box float32 de 24 valores, recortada a [-10, 10]):
+    Observación (Box float32, recortada a [-10, 10]; 24 valores por defecto):
         0-20  las 21 variables de data.py normalizadas, en la barra t - data_delay_bars
-              (incluye la familia creencia: trend_mean, trend_std, trend_snr).
-        21    log(capital / capital_inicial)       componente física
-        22    drawdown del capital en el episodio  componente física (<= 0)
-        23    log1p(horas faltantes antes de la barra observada) / log1p(145)
+              (incluye la familia creencia: trend_mean, trend_std, trend_snr);
+              menos si load_split recibió drop_families.
+        n+0   log(capital / capital_inicial)       componente física
+        n+1   drawdown del capital en el episodio  componente física (<= 0)
+        n+2   log1p(horas faltantes antes de la barra observada) / log1p(145)
 
     Acciones (Discrete(3)): 0 = quedarse fuera, 1 = abrir largo, 2 = abrir corto.
 
@@ -162,6 +172,12 @@ class TradingEnv(gym.Env):
                            observación y la volatilidad de las barreras usan
                            la barra t - data_delay_bars, el llenado no cambia.
         reward_scale       factor de la contribución (100).
+        reward_timing      'terminal' (diseño: se paga al cierre) o 'per_bar'
+                           (alternativa de la pregunta 3: mientras la operación
+                           está abierta cada barra es un paso forzado cuya
+                           acción se ignora y paga su cambio marcado a mercado;
+                           la observación agrega lado de la posición y
+                           fracción del horizonte transcurrida).
 
     Embargo: no se abren operaciones a menos de ``horizon_hours`` del final
     de la partición, para que ninguna barrera use precios del periodo
@@ -174,10 +190,12 @@ class TradingEnv(gym.Env):
     def __init__(self, split_data, horizon_hours=24, k_stop=1.0, k_take=1.0,
                  cost_rate=reward.COST_RATE, position_fraction=1.0, initial_capital=1_000_000.0,
                  episode_hours=None, random_start=False, intrabar_priority="stop_first",
-                 data_delay_bars=0, reward_scale=100.0):
+                 data_delay_bars=0, reward_scale=100.0, reward_timing="terminal"):
         super().__init__()
         if intrabar_priority not in INTRABAR_PRIORITIES:
             raise ValueError(f"intrabar_priority debe ser uno de {INTRABAR_PRIORITIES}")
+        if reward_timing not in REWARD_TIMINGS:
+            raise ValueError(f"reward_timing debe ser uno de {REWARD_TIMINGS}")
         if not 0 < position_fraction <= 1:
             raise ValueError("position_fraction debe estar en (0, 1]: sin apalancamiento")
         self.d = split_data
@@ -192,6 +210,7 @@ class TradingEnv(gym.Env):
         self.intrabar_priority = intrabar_priority
         self.data_delay_bars = data_delay_bars
         self.reward_scale = reward_scale
+        self.reward_timing = reward_timing
 
         self.first_decision = data_delay_bars
         embargo_limit = self.d.index[-1] - self.horizon
@@ -199,7 +218,7 @@ class TradingEnv(gym.Env):
         if self.last_decision < self.first_decision:
             raise ValueError("La partición es más corta que el horizonte más el retraso.")
 
-        n_obs = self.d.features.shape[1] + 3
+        n_obs = self.d.features.shape[1] + 3 + (2 if reward_timing == "per_bar" else 0)
         self.observation_space = spaces.Box(-OBS_CLIP, OBS_CLIP, shape=(n_obs,), dtype=np.float32)
         self.action_space = spaces.Discrete(3)
         self._t = None
@@ -219,30 +238,57 @@ class TradingEnv(gym.Env):
         self.peak_capital = self.initial_capital
         self.trade_log = []
         self.equity = [(self.d.index[self._t], self.capital)]
+        self._pending = []  # solo per_bar: (barra, contribución) de los pasos forzados
+        self._open_trade = None
         return self._observation(), {"tau_horas": 0.0, "capital": self.capital, "operacion": None}
 
     def step(self, action):
         """Aplica la decisión en la barra actual y avanza hasta la siguiente decisión."""
-        if self._t is None or self._t > self.last_decision:
+        if self._t is None or (self._t > self.last_decision and not self._pending):
             raise RuntimeError("Llama reset() antes de step() o después de terminar el episodio.")
         action = int(action)
         if not self.action_space.contains(action):
             raise ValueError(f"Acción fuera del espacio: {action}")
         t = self._t
-        if action == ACTION_FLAT:
-            next_t, record, contribution = t + 1, None, 0.0
+        record = None
+        if self._pending:  # per_bar: paso forzado, la acción se ignora
+            next_t, contribution = self._pending.pop(0)
+        elif action == ACTION_FLAT:
+            next_t, contribution = t + 1, 0.0
         else:
-            record, next_t = self._run_trade(t, SIDE_BY_ACTION[action])
-            contribution = reward.log_return_contribution(
-                record["capital_antes"], record["pnl_neto"], self.reward_scale)
-            self.capital = record["capital_despues"]
-            self.peak_capital = max(self.peak_capital, self.capital)
-            self.trade_log.append(record)
+            trade, exit_bar, acct = self._run_trade(t, SIDE_BY_ACTION[action])
+            if self.reward_timing == "terminal":
+                next_t = exit_bar
+                contribution = reward.log_return_contribution(
+                    trade["capital_antes"], trade["pnl_neto"], self.reward_scale)
+            else:
+                interim = self.d.close[t + 1:exit_bar]
+                rewards = reward.per_bar_contributions(
+                    trade["capital_antes"], acct, SIDE_BY_ACTION[action], trade["precio_entrada"],
+                    interim, self.reward_scale)
+                self._pending = list(zip(range(t + 1, exit_bar + 1), rewards))
+                next_t, contribution = self._pending.pop(0)
+            self._open_trade = trade
+        if self._open_trade is not None and not self._pending:
+            record = self._close_trade()
         self._t = next_t
         self.equity.append((self.d.index[next_t], self.capital))
         tau = (self.d.index[next_t] - self.d.index[t]) / ONE_HOUR
         info = {"tau_horas": float(tau), "capital": self.capital, "operacion": record}
         return self._observation(), float(contribution), False, self._is_truncated(), info
+
+    @property
+    def in_trade(self):
+        """True si hay una operación abierta con pasos forzados pendientes (solo per_bar)."""
+        return bool(self._pending)
+
+    def _close_trade(self):
+        """Aplica al capital la operación abierta y la registra en la bitácora."""
+        record, self._open_trade = self._open_trade, None
+        self.capital = record["capital_despues"]
+        self.peak_capital = max(self.peak_capital, self.capital)
+        self.trade_log.append(record)
+        return record
 
     def _sample_start(self):
         """Barra inicial: la primera, o una al azar con ventana completa dentro de la partición."""
@@ -255,7 +301,12 @@ class TradingEnv(gym.Env):
         return int(self.np_random.integers(self.first_decision, stop))
 
     def _is_truncated(self):
-        """Fin de ventana o de partición: truncamiento (el mercado sigue), nunca terminación."""
+        """Fin de ventana o de partición: truncamiento (el mercado sigue), nunca terminación.
+
+        Nunca se trunca con una operación abierta (pasos forzados de per_bar).
+        """
+        if self._pending:
+            return False
         if self._t > self.last_decision:
             return True
         return self._window_end is not None and self.d.index[self._t] >= self._window_end
@@ -270,8 +321,18 @@ class TradingEnv(gym.Env):
             self.capital / self.peak_capital - 1.0,
             np.log1p(self.d.gap_hours[seen]) / MAX_GAP_LOG,
         ]
+        if self.reward_timing == "per_bar":
+            physical += self._position_state()
         obs = np.concatenate([self.d.features[seen], np.asarray(physical, np.float32)])
         return np.clip(obs, -OBS_CLIP, OBS_CLIP).astype(np.float32)
+
+    def _position_state(self):
+        """Solo per_bar: lado de la posición abierta y fracción del horizonte transcurrida."""
+        if not self._pending:
+            return [0.0, 0.0]
+        trade = self._open_trade
+        elapsed = (self.d.index[self._t] + ONE_HOUR - trade["entrada_ts"]) / self.horizon
+        return [1.0 if trade["lado"] == "largo" else -1.0, float(elapsed)]
 
     # -- transición física: gestor de la posición ---------------------------
 
@@ -284,7 +345,10 @@ class TradingEnv(gym.Env):
         return stop, take
 
     def _run_trade(self, t, side):
-        """Simula la operación abierta en t hasta su cierre. Devuelve (registro, barra de la siguiente decisión)."""
+        """Simula la operación abierta en t hasta su cierre.
+
+        Devuelve (registro de bitácora, barra de la siguiente decisión, TradeAccounting).
+        """
         d = self.d
         entry_bar = t + 1
         entry_price = d.open[entry_bar]
@@ -316,7 +380,7 @@ class TradingEnv(gym.Env):
             "cruza_hueco": bool((d.gap_hours[entry_bar + 1:exit_bar + 1] > 0).any()),
             "entrada_post_hueco": bool(d.gap_hours[entry_bar] > 0),
         }
-        return record, exit_bar
+        return record, exit_bar, acct
 
     def _first_exit(self, entry_bar, side, stop, take, deadline):
         """Recorre las barras desde la entrada y devuelve el primer evento de cierre.
@@ -382,16 +446,17 @@ TRADE_LOG_COLUMNS = [
 ]
 
 
-def make_env(fold_number, split, **env_kwargs):
+def make_env(fold_number, split, drop_families=(), **env_kwargs):
     """Crea el entorno de un fold y partición con los valores por defecto del diseño.
 
     En train el episodio es una ventana de 720 horas (30 días) con inicio al
     azar; en valid y test es la partición completa, empezando en su primera
-    barra. Cualquier parámetro de TradingEnv se puede sobrescribir.
+    barra. ``drop_families`` pasa a load_split (ablación). Cualquier
+    parámetro de TradingEnv se puede sobrescribir.
     """
     defaults = ({"episode_hours": 720, "random_start": True} if split == "train"
                 else {"episode_hours": None, "random_start": False})
-    return TradingEnv(load_split(fold_number, split), **{**defaults, **env_kwargs})
+    return TradingEnv(load_split(fold_number, split, drop_families), **{**defaults, **env_kwargs})
 
 
 # ---------------------------------------------------------------------------
