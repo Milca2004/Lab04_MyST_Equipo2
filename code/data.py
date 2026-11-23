@@ -557,19 +557,35 @@ def rejected_level_features(bars):
     )
 
 
+NULL_BLOCK_BARS = 720  # 30 días de barras horarias
+
+
+def block_permutation(values, block, rng):
+    """Reordena ``values`` por bloques contiguos de ``block`` elementos (el último puede ser más corto)."""
+    blocks = [values[start:start + block] for start in range(0, len(values), block)]
+    return np.concatenate([blocks[i] for i in rng.permutation(len(blocks))])
+
+
 def target_relations(feature, target, rng_seed=SEED):
-    """Pearson, Spearman, información mutua y MI de referencia con objetivo barajado.
+    """Pearson, Spearman, información mutua y dos MI de referencia.
 
     La MI (k vecinos, sklearn) mide cualquier dependencia, también la de la
     magnitud del movimiento (no solo su signo). ``mi_null`` es la MI con el
-    objetivo barajado al azar (semilla 42): el nivel que se obtiene por puro
-    ruido de estimación.
+    objetivo barajado hora por hora (semilla 42): el nivel que se obtiene por
+    puro ruido de estimación. ``mi_null_bloques`` baraja el objetivo por
+    bloques de 30 días (NULL_BLOCK_BARS, semilla 42): cada bloque conserva su
+    volatilidad y su tendencia lenta, pero cae en otra época. Si una variable
+    solo identifica la época, su MI con el objetivo verdadero no debería
+    quedar muy por encima de este nulo. Es una sola permutación, no una
+    distribución.
     """
     valid = feature.notna() & target.notna()
     x, y = feature[valid].to_numpy(), target[valid].to_numpy()
     shuffled = np.random.default_rng(rng_seed).permutation(y)
-    mi, mi_null = (
-        mutual_info_regression(x.reshape(-1, 1), t, random_state=rng_seed)[0] for t in (y, shuffled)
+    block_shuffled = block_permutation(y, NULL_BLOCK_BARS, np.random.default_rng(rng_seed))
+    mi, mi_null, mi_null_blocks = (
+        mutual_info_regression(x.reshape(-1, 1), t, random_state=rng_seed)[0]
+        for t in (y, shuffled, block_shuffled)
     )
     return {
         "n": int(valid.sum()),
@@ -577,6 +593,7 @@ def target_relations(feature, target, rng_seed=SEED):
         "spearman": float(stats.spearmanr(x, y).statistic),
         "mi": float(mi),
         "mi_null": float(mi_null),
+        "mi_null_bloques": float(mi_null_blocks),
     }
 
 
@@ -585,9 +602,10 @@ def feature_analysis(bars, fold):
 
     Incluye las 21 variables del estado (por familia) y la alternativa
     rechazada en nivel. Por variable: ADF, KPSS, autocorrelación de rezago 1 y,
-    por horizonte, Pearson, Spearman, MI y MI de referencia. Todo se calcula
-    solo con filas del train del fold; las variables son causales, así que
-    calcularlas sobre la serie completa y luego recortar al train da lo mismo.
+    por horizonte, Pearson, Spearman, MI y las dos MI de referencia (barajado
+    hora por hora y por bloques de 30 días). Todo se calcula solo con filas
+    del train del fold; las variables son causales, así que calcularlas sobre
+    la serie completa y luego recortar al train da lo mismo.
     """
     features, families = build_features(bars)
     families = {**families, REJECTED_FAMILY: list(rejected_level_features(bars).columns)}

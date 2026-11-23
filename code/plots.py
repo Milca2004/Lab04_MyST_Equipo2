@@ -244,16 +244,23 @@ def plot_intraday_seasonality(fig, bars):
 
 
 def plot_feature_information(fig, analysis):
-    """Información mutua máxima por familia con el objetivo a 1, 4 y 24 h (train de un fold)."""
+    """Información mutua máxima por familia con el objetivo a 1, 4 y 24 h (train de un fold).
+
+    Sobre cada barra, una marca negra con la MI de esa misma variable contra
+    el objetivo barajado por bloques de 30 días (lo que se obtiene solo por
+    identificar la época).
+    """
     ax = fig.add_axes([0.07, 0.3, 0.9, 0.55])
     families = list(dict.fromkeys(analysis["familia"]))
     width = 0.26
     x = np.arange(len(families))
     for i, h in enumerate(data.HORIZONS):
-        best = analysis.groupby("familia", sort=False)[f"mi_h{h}"].max().reindex(families)
-        ax.bar(x + (i - 1) * width, best.to_numpy(), width=width * 0.92, color=SERIES[i], label=f"MI máxima, objetivo h = {h} h")
+        best = analysis.loc[analysis.groupby("familia", sort=False)[f"mi_h{h}"].idxmax()].set_index("familia").reindex(families)
+        ax.bar(x + (i - 1) * width, best[f"mi_h{h}"].to_numpy(), width=width * 0.92, color=SERIES[i], label=f"MI máxima, objetivo h = {h} h")
+        ax.scatter(x + (i - 1) * width, best[f"mi_null_bloques_h{h}"].to_numpy(), marker="_", s=180, linewidths=2.2,
+                   color=INK, zorder=3, label="MI de esa variable con objetivo barajado por bloques de 30 días" if i == 0 else None)
     noise = analysis[[f"mi_null_h{h}" for h in data.HORIZONS]].to_numpy().max()
-    ax.axhline(noise, color=INK, lw=1.2, ls="--", label=f"MI máxima con objetivo barajado (ruido) = {noise:.3f}")
+    ax.axhline(noise, color=INK, lw=1.2, ls="--", label=f"MI máxima con objetivo barajado hora por hora (ruido) = {noise:.3f}")
     ax.set_ylim(0, analysis[[f"mi_h{h}" for h in data.HORIZONS]].to_numpy().max() * 1.4)
     ax.set_xticks(x, [f.replace("_", " / ").replace("rechazada / nivel", "rechazada\n(nivel)") for f in families])
     ax.set_xlabel("Familia de variables")
@@ -386,10 +393,13 @@ def write_eda_pdf(bars, path=data.ARTIFACTS_DIR / "btcusdt_eda.pdf", raw=None):
 
         fig = new_page("8. Información de cada familia sobre el retorno futuro")
         plot_feature_information(fig, analysis)
-        rejected = analysis[analysis["familia"] == data.REJECTED_FAMILY]
+        rows = analysis.set_index("variable")
+        level_share = rows.loc["log_close", "mi_null_bloques_h24"] / rows.loc["log_close", "mi_h24"]
+        ema_share = rows.loc["dist_ema_168", "mi_null_bloques_h24"] / rows.loc["dist_ema_168", "mi_h24"]
         add_design_note(fig, "volatilidad y creencia aportan la mayor MI (sobre todo en la magnitud del movimiento); tiempo y volumen quedan "
-                             f"cerca del ruido. Las variables en nivel muestran MI alta a 24 h (hasta {rejected['mi_h24'].max():.3f}) pero no son "
-                             "estacionarias: esa MI es espuria (el nivel funciona como reloj del régimen) y por eso se rechazan.")
+                             f"cerca del ruido. El log-precio en nivel tiene MI alta a 24 h ({rows.loc['log_close', 'mi_h24']:.3f}), pero no es "
+                             f"estacionario y el objetivo barajado por bloques de 30 días conserva {level_share:.0%} de esa MI (contra {ema_share:.0%} "
+                             "en dist_ema_168): sobre todo identifica la época, no una regla. Por eso se rechazan las variables en nivel.")
         pdf.savefig(fig)
         plt.close(fig)
 
