@@ -50,6 +50,8 @@ python main.py
 
 Este comando corre el pipeline completo y escribe todos los artefactos en `artifacts/`.
 
+**Tiempo de ejecución.** En un clon limpio no existe `models/` (está en .gitignore), así que `python main.py` entrena todos los modelos: 88 corridas que suman ~1.5 h de cómputo; con `--jobs 4` tardó ~26 min (artifacts/run_metadata.csv), más ablación y evaluación, en total ~30–45 min. Si `models/` existe, reutiliza los modelos y solo recalcula la evaluación. `--force` reentrena todo.
+
 **Semilla:** 42. Está fijada en `main.py` y se usa en todo lo que tiene aleatoriedad. Aun con las semillas fijas, los números pueden variar un poco entre sistemas operativos y procesadores, porque las operaciones de punto flotante de numpy y torch no son idénticas en todas las plataformas.
 
 ## Pruebas
@@ -76,6 +78,6 @@ Se usa solo para el benchmark de indexar al S&P 500 (`code/evaluate.py`); no ent
 
 ## Uso de asistencia de IA
 
-- **Milca:** usé Claude Code como asistente para escribir `code/data.py`, mis funciones de `code/plots.py` y `tests/test_causality.py`, y para generar `artifacts/btcusdt_eda.pdf` y `artifacts/feature_analysis_fold_{1,2,3,4}.csv`. Las cifras de limpieza del CSV, los folds y los huecos se verificaron corriendo el código.
+- **Milca:** usé Claude Code como asistente para escribir `code/data.py`, mis funciones de `code/plots.py` y `tests/test_causality.py`, y para generar `artifacts/btcusdt_eda.pdf` y `artifacts/feature_analysis_fold_{1,2,3,4}.csv`. Las cifras de limpieza del CSV, los folds y los huecos se verificaron corriendo el código. El reporte, el walkthrough y la presentación (`docs/reporte.pdf`, `docs/walkthrough.pdf` y `docs/presentacion.pdf`) se armaron con Claude Code a partir de los borradores y los CSV de `artifacts/`.
 - **Arturo:** usé Claude Code como asistente para escribir `code/env.py`, `code/reward.py`, `code/sensitivity.py`, `tests/test_env.py` y `tests/test_reference_trade.py`, y como apoyo de diseño mediante la skill `llm-council` (sus veredictos y las correcciones que les hice están en mi borrador de reporte). Verifiqué corriendo código: `check_env` sin advertencias, las operaciones de referencia contra cálculos a mano, la identidad contable, que el agente aleatorio pierde en el train de los 4 folds y todas las cifras de diseño (solo con train). También revisé en el código fuente de Stable-Baselines3 2.9.2 cómo DQN aplica el descuento.
-- **Paula:** usé Claude Code como asistente para escribir `code/train.py`, `code/evaluate.py`, `main.py` y `tests/test_accounting.py`, y para correr el pipeline y redactar mis borradores (`docs/borradores/paula_*.md`). Verifiqué corriendo código: las 28 pruebas previas más la identidad contable, que el test se evalúa una sola vez después de fijar todo con valid, y que cada cifra de mis borradores sale de los CSV de `artifacts/`.
+- **Paula:** usé Claude Code como asistente para escribir `code/train.py`, `code/evaluate.py`, `main.py` y `tests/test_accounting.py`, y para correr el pipeline y redactar mis borradores (`docs/borradores/paula_*.md`). Verifiqué corriendo código: las 32 pruebas previas más la identidad contable, que el test se evalúa una sola vez después de fijar todo con valid, y que cada cifra de mis borradores sale de los CSV de `artifacts/`.
