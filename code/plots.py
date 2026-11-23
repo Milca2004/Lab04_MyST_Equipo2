@@ -427,7 +427,7 @@ def write_eda_pdf(bars, path=data.ARTIFACTS_DIR / "btcusdt_eda.pdf", raw=None):
         add_design_note(fig, "volatilidad y creencia aportan la mayor MI (sobre todo en la magnitud del movimiento); tiempo y volumen quedan "
                              f"cerca del ruido. El log-precio en nivel tiene MI alta a 24 h ({rows.loc['log_close', 'mi_h24']:.3f}), pero no es "
                              f"estacionario y el objetivo barajado por bloques de 30 días conserva {level_share:.0%} de esa MI (contra {ema_share:.0%} "
-                             "en dist_ema_168): sobre todo identifica la época, no una regla. Por eso se rechazan las variables en nivel.")
+                             "en dist_ema_168): buena parte de esa MI sale solo de la época. El rechazo se apoya sobre todo en que no es estacionario.")
         pdf.savefig(fig)
         plt.close(fig)
 
