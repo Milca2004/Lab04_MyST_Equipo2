@@ -71,6 +71,9 @@ Funciona igual en Mac, Linux y Windows. `tests/conftest.py` agrega `code/` a la 
 
 El archivo `data/Binance_BTCUSDT_1h.csv` es una copia del archivo publicado en Canvas. Se incluye en el repo para que el pipeline corra con un solo comando. Es la única carpeta fuera de la estructura del enunciado, y está pendiente confirmarlo con el profesor.
 
+`data/sp500_daily.csv` tiene los cierres diarios del índice S&P 500 (2022-12-01 a 2026-04-30, 855 días hábiles; se quitaron los festivos sin cierre). Fuente: FRED, Federal Reserve Bank of St. Louis, serie `SP500` (https://fred.stlouisfed.org/series/SP500), descargada el 2026-11-22.
+Se usa solo para el benchmark de indexar al S&P 500 (`code/evaluate.py`); no entra al estado ni al entrenamiento del agente.
+
 ## Uso de asistencia de IA
 
 - **Milca:** usé Claude Code como asistente para escribir `code/data.py`, mis funciones de `code/plots.py` y `tests/test_causality.py`, y para generar `artifacts/btcusdt_eda.pdf` y `artifacts/feature_analysis_fold_{1,2,3,4}.csv`. Las cifras de limpieza del CSV, los folds y los huecos se verificaron corriendo el código.
