@@ -398,13 +398,17 @@ EDA_FOLD = 4  # el train del fold 4 (2017-08 a 2024-12) contiene a los demás
 HORIZONS = (1, 4, 24)
 HOURS_PER_YEAR = 24 * 365
 
-# Regímenes del train del fold 4. Las fronteras son los puntos de giro que
-# da un zigzag de 60% sobre el cierre diario (UTC) del train del fold 4,
-# calculado durante el desarrollo: máximos 2017-12-16, 2019-06-26 y
-# 2021-11-08; mínimos 2018-12-15, 2020-03-12 y 2022-11-21. Se omitió el
-# rebote de un mes de 2018-02-05 a 2018-03-04 (también lo marca el zigzag)
-# por ser ruido dentro del mercado bajista de 2018. Los regímenes alternan
-# alcista y bajista (ver el signo de retorno_total en characterize_regimes).
+# Regímenes del train del fold 4. Las fronteras son los puntos de giro que da
+# zigzag_turning_points(daily_close(eda_train(bars)), REGIME_THRESHOLD):
+# máximos 2017-12-16, 2019-06-26 y 2021-11-08; mínimos 2018-12-15, 2020-03-12
+# y 2022-11-21. Se omitió a mano el rebote de un mes de 2018-02-05 a
+# 2018-03-04 (también lo marca el zigzag) por ser ruido dentro del mercado
+# bajista de 2018. Los regímenes alternan alcista y bajista (ver el signo de
+# retorno_total en characterize_regimes). Son SOLO descriptivos: no entran al
+# estado del agente ni a ninguna decisión. regime_threshold_table muestra por
+# qué el umbral es 60%.
+REGIME_THRESHOLD = 0.60
+THRESHOLD_GRID = (0.40, 0.50, 0.60, 0.70)
 REGIMES = (
     ("Burbuja 2017", "2017-08-17", "2017-12-16"),
     ("Invierno cripto 2018", "2017-12-17", "2018-12-15"),
@@ -422,6 +426,66 @@ REJECTED_FAMILY = "rechazada_nivel"
 def eda_train(bars):
     """Barras del train del fold usado en el EDA general (fold 4)."""
     return get_folds()[EDA_FOLD - 1].split(bars)[0]
+
+
+def daily_close(bars):
+    """Cierre diario (UTC): último cierre horario de cada día con barras."""
+    return bars["close"].resample("D").last().dropna()
+
+
+def zigzag_turning_points(daily_close, threshold):
+    """Puntos de giro de un zigzag porcentual sobre el cierre diario.
+
+    Un máximo se confirma cuando el precio cae ``threshold`` (p. ej. 60%)
+    desde él, y un mínimo cuando el precio sube ``threshold`` desde él. El
+    primer tramo arranca cuando el precio se aleja ``threshold`` del primer
+    cierre. Devuelve los giros internos confirmados (sin el primer ni el
+    último día), con columnas fecha, precio y tipo ("maximo" o "minimo").
+
+    NO es causal: un giro solo se conoce días o meses después, cuando el
+    precio ya se alejó. Por eso sirve para describir el train, no como
+    variable del estado.
+    """
+    dates, prices = daily_close.index, daily_close.to_numpy()
+    turns, direction = [], 0
+    extreme = 0
+    for i, price in enumerate(prices):
+        if direction == 0:
+            if price >= prices[0] * (1 + threshold):
+                direction, extreme = 1, i
+            elif price <= prices[0] * (1 - threshold):
+                direction, extreme = -1, i
+        elif direction == 1:
+            if price > prices[extreme]:
+                extreme = i
+            elif price <= prices[extreme] * (1 - threshold):
+                turns.append((dates[extreme], prices[extreme], "maximo"))
+                direction, extreme = -1, i
+        else:
+            if price < prices[extreme]:
+                extreme = i
+            elif price >= prices[extreme] * (1 + threshold):
+                turns.append((dates[extreme], prices[extreme], "minimo"))
+                direction, extreme = 1, i
+    return pd.DataFrame(turns, columns=["fecha", "precio", "tipo"])
+
+
+def regime_threshold_table(bars, thresholds=THRESHOLD_GRID):
+    """Sensibilidad del umbral del zigzag (solo train).
+
+    Por umbral: giros y regímenes en el train del fold 4, y regímenes
+    confirmados usando SOLO el train de cada fold (el último tramo de cada
+    train queda abierto: su giro final aún no se confirma y no se cuenta).
+    """
+    rows = []
+    for threshold in thresholds:
+        turns_fold4 = zigzag_turning_points(daily_close(eda_train(bars)), threshold)
+        row = {"umbral": threshold, "giros_fold_4": len(turns_fold4), "regimenes_fold_4": len(turns_fold4) + 1}
+        for fold in get_folds():
+            turns = zigzag_turning_points(daily_close(fold.split(bars)[0]), threshold)
+            row[f"confirmados_fold_{fold.number}"] = len(turns)
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def max_drawdown(close):
@@ -557,19 +621,35 @@ def rejected_level_features(bars):
     )
 
 
+NULL_BLOCK_BARS = 720  # 30 días de barras horarias
+
+
+def block_permutation(values, block, rng):
+    """Reordena ``values`` por bloques contiguos de ``block`` elementos (el último puede ser más corto)."""
+    blocks = [values[start:start + block] for start in range(0, len(values), block)]
+    return np.concatenate([blocks[i] for i in rng.permutation(len(blocks))])
+
+
 def target_relations(feature, target, rng_seed=SEED):
-    """Pearson, Spearman, información mutua y MI de referencia con objetivo barajado.
+    """Pearson, Spearman, información mutua y dos MI de referencia.
 
     La MI (k vecinos, sklearn) mide cualquier dependencia, también la de la
     magnitud del movimiento (no solo su signo). ``mi_null`` es la MI con el
-    objetivo barajado al azar (semilla 42): el nivel que se obtiene por puro
-    ruido de estimación.
+    objetivo barajado hora por hora (semilla 42): el nivel que se obtiene por
+    puro ruido de estimación. ``mi_null_bloques`` baraja el objetivo por
+    bloques de 30 días (NULL_BLOCK_BARS, semilla 42): cada bloque conserva su
+    volatilidad y su tendencia lenta, pero cae en otra época. Si una variable
+    solo identifica la época, su MI con el objetivo verdadero no debería
+    quedar muy por encima de este nulo. Es una sola permutación, no una
+    distribución.
     """
     valid = feature.notna() & target.notna()
     x, y = feature[valid].to_numpy(), target[valid].to_numpy()
     shuffled = np.random.default_rng(rng_seed).permutation(y)
-    mi, mi_null = (
-        mutual_info_regression(x.reshape(-1, 1), t, random_state=rng_seed)[0] for t in (y, shuffled)
+    block_shuffled = block_permutation(y, NULL_BLOCK_BARS, np.random.default_rng(rng_seed))
+    mi, mi_null, mi_null_blocks = (
+        mutual_info_regression(x.reshape(-1, 1), t, random_state=rng_seed)[0]
+        for t in (y, shuffled, block_shuffled)
     )
     return {
         "n": int(valid.sum()),
@@ -577,6 +657,7 @@ def target_relations(feature, target, rng_seed=SEED):
         "spearman": float(stats.spearmanr(x, y).statistic),
         "mi": float(mi),
         "mi_null": float(mi_null),
+        "mi_null_bloques": float(mi_null_blocks),
     }
 
 
@@ -585,9 +666,10 @@ def feature_analysis(bars, fold):
 
     Incluye las 21 variables del estado (por familia) y la alternativa
     rechazada en nivel. Por variable: ADF, KPSS, autocorrelación de rezago 1 y,
-    por horizonte, Pearson, Spearman, MI y MI de referencia. Todo se calcula
-    solo con filas del train del fold; las variables son causales, así que
-    calcularlas sobre la serie completa y luego recortar al train da lo mismo.
+    por horizonte, Pearson, Spearman, MI y las dos MI de referencia (barajado
+    hora por hora y por bloques de 30 días). Todo se calcula solo con filas
+    del train del fold; las variables son causales, así que calcularlas sobre
+    la serie completa y luego recortar al train da lo mismo.
     """
     features, families = build_features(bars)
     families = {**families, REJECTED_FAMILY: list(rejected_level_features(bars).columns)}

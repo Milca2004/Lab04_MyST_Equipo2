@@ -112,9 +112,9 @@ def plot_price_regimes(fig, bars, regimes):
     legend_with_regimes(ax, "lower right")
 
 
-def plot_regime_table(fig, regimes):
-    """Tabla de regímenes: fechas, retorno, tendencia, volatilidad y drawdown."""
-    ax = fig.add_axes([0.04, 0.3, 0.92, 0.55])
+def plot_regime_table(fig, regimes, thresholds):
+    """Tabla de regímenes (fechas, retorno, tendencia, volatilidad, drawdown) y sensibilidad del umbral del zigzag."""
+    ax = fig.add_axes([0.04, 0.5, 0.92, 0.38])
     ax.axis("off")
     ax.set_title("Caracterización de regímenes · train del fold 4", loc="left")
     header = ["", "Régimen", "Inicio", "Fin", "Días", "Retorno\ntotal", "Tendencia\nlog anual",
@@ -125,7 +125,35 @@ def plot_regime_table(fig, regimes):
         for i, r in enumerate(regimes.itertuples(), start=1)
     ]
     table = ax.table(cellText=cells, colLabels=header, loc="upper center", cellLoc="center")
-    style_table(table, [0.04, 0.22, 0.09, 0.09, 0.06, 0.08, 0.09, 0.1, 0.09, 0.09], row_height=2.3)
+    style_table(table, [0.04, 0.22, 0.09, 0.09, 0.06, 0.08, 0.09, 0.1, 0.09, 0.09], font_size=9.5, row_height=1.55)
+    for col in range(len(header)):
+        table[0, col].set_height(table[0, col].get_height() * 1.6)
+
+    bottom = fig.add_axes([0.04, 0.24, 0.6, 0.27])
+    bottom.axis("off")
+    bottom.set_title("Umbral del zigzag sobre el cierre diario · solo train", loc="left")
+    header = ["Umbral", "Giros\nfold 4", "Regímenes\nfold 4", *[f"Confirmados\nfold {k}" for k in range(1, 5)]]
+    cells = [[f"{r.umbral:.0%}", r.giros_fold_4, r.regimenes_fold_4, r.confirmados_fold_1, r.confirmados_fold_2,
+              r.confirmados_fold_3, r.confirmados_fold_4] for r in thresholds.itertuples()]
+    table = bottom.table(cellText=cells, colLabels=header, loc="upper center", cellLoc="center")
+    style_table(table, [0.1, 0.13, 0.15, 0.155, 0.155, 0.155, 0.155], font_size=9.5, row_height=1.5)
+    for col in range(len(header)):
+        table[0, col].set_height(table[0, col].get_height() * 1.7)
+    chosen = thresholds.set_index("umbral").loc[data.REGIME_THRESHOLD]
+    fig.text(0.67, 0.51, "Los regímenes son solo descriptivos: no entran al\n"
+                         "estado del agente ni a ninguna decisión.\n\n"
+                         f"Con {data.REGIME_THRESHOLD:.0%}, el zigzag marca {chosen.giros_fold_4} giros; la tabla\n"
+                         "de arriba une a mano el rebote de 2018-02-05\n"
+                         "a 2018-03-04.\n"
+                         "Con 50% el ciclo 2020-21 se parte en la corrección\n"
+                         "de abril a julio de 2021; con 70% se pierden la\n"
+                         "recuperación de 2019 y la caída del COVID. 60%\n"
+                         "separa ciclos de mercado y no correcciones\n"
+                         "intermedias.\n\n"
+                         "\"Confirmados\": giros que el zigzag ya confirma con\n"
+                         "solo el train de ese fold (el último tramo queda\n"
+                         "abierto). \"Fold 4\": train del fold 4.",
+             fontsize=9.5, color=INK, va="top")
 
 
 def plot_drawdown_volatility(fig, bars, regimes):
@@ -244,16 +272,23 @@ def plot_intraday_seasonality(fig, bars):
 
 
 def plot_feature_information(fig, analysis):
-    """Información mutua máxima por familia con el objetivo a 1, 4 y 24 h (train de un fold)."""
+    """Información mutua máxima por familia con el objetivo a 1, 4 y 24 h (train de un fold).
+
+    Sobre cada barra, una marca negra con la MI de esa misma variable contra
+    el objetivo barajado por bloques de 30 días (lo que se obtiene solo por
+    identificar la época).
+    """
     ax = fig.add_axes([0.07, 0.3, 0.9, 0.55])
     families = list(dict.fromkeys(analysis["familia"]))
     width = 0.26
     x = np.arange(len(families))
     for i, h in enumerate(data.HORIZONS):
-        best = analysis.groupby("familia", sort=False)[f"mi_h{h}"].max().reindex(families)
-        ax.bar(x + (i - 1) * width, best.to_numpy(), width=width * 0.92, color=SERIES[i], label=f"MI máxima, objetivo h = {h} h")
+        best = analysis.loc[analysis.groupby("familia", sort=False)[f"mi_h{h}"].idxmax()].set_index("familia").reindex(families)
+        ax.bar(x + (i - 1) * width, best[f"mi_h{h}"].to_numpy(), width=width * 0.92, color=SERIES[i], label=f"MI máxima, objetivo h = {h} h")
+        ax.scatter(x + (i - 1) * width, best[f"mi_null_bloques_h{h}"].to_numpy(), marker="_", s=180, linewidths=2.2,
+                   color=INK, zorder=3, label="MI de esa variable con objetivo barajado por bloques de 30 días" if i == 0 else None)
     noise = analysis[[f"mi_null_h{h}" for h in data.HORIZONS]].to_numpy().max()
-    ax.axhline(noise, color=INK, lw=1.2, ls="--", label=f"MI máxima con objetivo barajado (ruido) = {noise:.3f}")
+    ax.axhline(noise, color=INK, lw=1.2, ls="--", label=f"MI máxima con objetivo barajado hora por hora (ruido) = {noise:.3f}")
     ax.set_ylim(0, analysis[[f"mi_h{h}" for h in data.HORIZONS]].to_numpy().max() * 1.4)
     ax.set_xticks(x, [f.replace("_", " / ").replace("rechazada / nivel", "rechazada\n(nivel)") for f in families])
     ax.set_xlabel("Familia de variables")
@@ -334,7 +369,7 @@ def write_eda_pdf(bars, path=data.ARTIFACTS_DIR / "btcusdt_eda.pdf", raw=None):
         plt.close(fig)
 
         fig = new_page("2. Caracterización de regímenes")
-        plot_regime_table(fig, regimes)
+        plot_regime_table(fig, regimes, data.regime_threshold_table(bars))
         add_design_note(fig, f"la volatilidad anualizada va de {regimes['vol_anualizada'].min():.0%} a {regimes['vol_anualizada'].max():.0%} "
                              f"y el drawdown llega a {regimes['max_drawdown'].min():.0%}; ningún régimen representa a todo el train. "
                              "Por eso el estado incluye volatilidad y la creencia de tendencia con su incertidumbre, y cada fold se normaliza solo con su train.")
@@ -386,10 +421,13 @@ def write_eda_pdf(bars, path=data.ARTIFACTS_DIR / "btcusdt_eda.pdf", raw=None):
 
         fig = new_page("8. Información de cada familia sobre el retorno futuro")
         plot_feature_information(fig, analysis)
-        rejected = analysis[analysis["familia"] == data.REJECTED_FAMILY]
+        rows = analysis.set_index("variable")
+        level_share = rows.loc["log_close", "mi_null_bloques_h24"] / rows.loc["log_close", "mi_h24"]
+        ema_share = rows.loc["dist_ema_168", "mi_null_bloques_h24"] / rows.loc["dist_ema_168", "mi_h24"]
         add_design_note(fig, "volatilidad y creencia aportan la mayor MI (sobre todo en la magnitud del movimiento); tiempo y volumen quedan "
-                             f"cerca del ruido. Las variables en nivel muestran MI alta a 24 h (hasta {rejected['mi_h24'].max():.3f}) pero no son "
-                             "estacionarias: esa MI es espuria (el nivel funciona como reloj del régimen) y por eso se rechazan.")
+                             f"cerca del ruido. El log-precio en nivel tiene MI alta a 24 h ({rows.loc['log_close', 'mi_h24']:.3f}), pero no es "
+                             f"estacionario y el objetivo barajado por bloques de 30 días conserva {level_share:.0%} de esa MI (contra {ema_share:.0%} "
+                             "en dist_ema_168): buena parte de esa MI sale solo de la época. El rechazo se apoya sobre todo en que no es estacionario.")
         pdf.savefig(fig)
         plt.close(fig)
 
