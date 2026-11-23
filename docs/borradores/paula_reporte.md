@@ -53,7 +53,7 @@ Rama `paula/entrenamiento`. Todas las cifras salen de los CSV de `artifacts/` ge
 
 **Lectura de la rejilla:**
 - **Todas las configuraciones pierden en valid.** Como referencia, Arturo midió en valid −1.34 para el agente aleatorio y −1.44 para "siempre largo" (promedio de folds, `sensitivity_baselines.csv`).
-- **Óptimos en el borde de la rejilla:** en 7 de 8 casos el número de pasos elegido es un extremo, y en 6 de 8 lo es el lr.
+- **Óptimos en el borde de la rejilla:** en 8 de 8 casos el número de pasos elegido es un extremo, y en 6 de 8 lo es el lr.
   - Lo más frecuente son **25k pasos**, el mínimo. Entrenar más empeora valid.
   - Las curvas de entrenamiento lo explican: entre 25k y 100k pasos la recompensa por episodio de **train** sube (en el fold 1, PPO pasa de ≈0 a +10/+40 por ventana de 720 h), mientras la de valid baja. Es sobreajuste al train, no aprendizaje de una regularidad.
   - Un óptimo en el borde indica que el mejor punto podría estar fuera de la rejilla: menos pasos, que se acerca a "no operar".
@@ -109,9 +109,9 @@ Rama `paula/entrenamiento`. Todas las cifras salen de los CSV de `artifacts/` ge
 | Log C_T/C_0 | −0.78 (0.41) | −0.35 (0.26) | +0.38 (0.56) | −1.07 (0.65) | −0.96 (0.43) | 0 |
 | Correlación diaria con BTC | 0.05 (0.35) | 0.12 (0.16) | 1.00 | 0.00 (0.10) | 0.81 (0.03) | — |
 | Alfa vs BTC | −119 pp (84) | −91 pp (100) | 0 | −127 pp (100) | −128 pp (82) | −59 pp (92) |
-| Alfa vs S&P 500 | pendiente | pendiente | pendiente | pendiente | pendiente | pendiente |
+| Alfa vs S&P 500 | −80 pp (6) | −52 pp (16) | +39 pp (87) | −88 pp (16) | −89 pp (8) | −20 pp (5) |
 
-**S&P 500:** `evaluate.sp500_index` ya está listo para recibir `data/sp500_daily.csv`, con columnas `fecha` y `close`. El archivo depende de Milca y de la respuesta del profesor, porque el enunciado prohíbe datos externos de precio pero pide este benchmark. Sin él, la columna queda vacía y las gráficas lo indican.
+**S&P 500:** tomado de FRED (serie `SP500`, el índice y no un ETF) solo como benchmark, en `data/sp500_daily.csv` (columnas `fecha` y `close`). Ya está incluido en `artifacts/metrics_summary.csv` (fila `sp500` y columna `alfa_vs_sp500`) y en las curvas `equity_curves_test_fold_{k}.png`. **Supuesto declarado:** el enunciado restringe los datos externos de precio, y por eso este archivo se usa solo como benchmark: no entra al estado ni al entrenamiento del agente.
 
 **Por fold (test, log C_T/C_0 y retorno total del modelo representativo):**
 
@@ -145,7 +145,7 @@ Rama `paula/entrenamiento`. Todas las cifras salen de los CSV de `artifacts/` ge
 
 **No.**
 - **Contra BTC:** PPO tiene un alfa medio de −119 pp por año y DQN de −91 pp. Solo en el fold 4 DQN (−8.0%) queda ligeramente por encima de comprar y mantener (−10.8%), y en un periodo de 4 meses esa diferencia no es significativa.
-- **Contra el S&P 500:** pendiente del archivo de datos. Como ambos agentes tienen retorno negativo en los cuatro folds y el S&P subió en 2023, 2024 y 2025, es casi seguro que tampoco lo superan, pero no damos una cifra sin el dato.
+- **Contra el S&P 500:** el alfa medio es −80 pp por año en PPO y −52 pp en DQN, y es negativo en los 4 folds para los dos agentes (el S&P 500 rindió +24.6%, +23.9%, +16.5% y +4.3% en los folds 1 a 4, `metrics_summary.csv`).
 
 **¿Qué mide entonces el resultado?**
 
@@ -328,7 +328,8 @@ Complementa la sección 5 del reporte de Arturo, que usa políticas base. Fuente
 
 ---
 
-## 9. Pendientes
+## 9. Supuestos y pendientes
 
-- **S&P 500:** falta el archivo `data/sp500_daily.csv`, que depende de la respuesta del profesor. Con él, `python main.py` llena la columna `alfa_vs_sp500` y la curva en `equity_curves_test_fold_{k}.png` sin cambiar código.
+- **S&P 500:** resuelto. `data/sp500_daily.csv` (FRED, serie `SP500`) alimenta `alfa_vs_sp500` y las curvas de capital. Supuesto declarado: se usa solo como benchmark.
+- **Datos:** el CSV de Canvas se usa tal cual (75,588 filas contra 75,558 del enunciado), como supuesto declarado.
 - **Gráfica del drawdown:** si Milca prefiere que esté en `plots.py`, se puede mover. Hoy la genera `evaluate.plot_drawdown_period`.

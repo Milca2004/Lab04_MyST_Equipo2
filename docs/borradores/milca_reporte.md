@@ -8,7 +8,7 @@ Las cifras salen de código que corrió el 2026-11-23 (semilla 42): `data.py` y 
 
 Archivo de Canvas con barras horarias de BTCUSDT, del 2017-08-17 04:00 al 2026-04-26 23:00 UTC. Lo limpia `data.py` y deja una barra por hora, con una columna `gap_hours` que dice cuántas horas faltan justo antes de cada barra.
 
-- **Filas:** el archivo trae 75,588; el enunciado dice 75,558 (30 menos) [PENDIENTE: confirmar con el profesor que el archivo de Canvas es el correcto].
+- **Filas:** el archivo trae 75,588; el enunciado dice 75,558 (30 menos). **Supuesto declarado:** usamos el CSV de Canvas tal cual (75,588 filas contra 75,558 del enunciado).
 - **Duplicados:** 506 filas repiten fecha y OHLCV de otra fila (todas en 2025; solo cambia la escala de la columna `Unix`, que no usamos). Se eliminan y quedan **75,082 barras únicas**.
 - **Hora fuera de punto:** 43 barras de febrero de 2018 traen minutos y segundos. Se redondean hacia abajo a la hora: la barra marcada 03:28:14 cierra en 7,976.74 y la de las 04:00 abre en 7,976.74, así que es la barra de 03:00 a 04:00 y su cierre se conoce a las 04:00 (sin mirar al futuro).
 - **Huecos:** no se rellenan. Contra una malla horaria completa de 76,196 horas faltan 1,114, repartidas en 376 huecos. Desde abril de 2025 falta casi a diario la barra de las 00:00 UTC (230 huecos de 1 h en 2025 y 103 en 2026), y hay huecos largos (el mayor, 145 h en julio de 2025).
@@ -137,13 +137,13 @@ El efecto es moderado (hasta un 12% más de reloj en el test del fold 4) y no ca
 
 | Solicitud | Estado | Dónde |
 |---|---|---|
-| 1. Cargador del S&P 500 | Hecho (PR #3) | `data/sp500_daily.csv` (FRED, serie `SP500`); `evaluate.load_sp500` lo lee; fuente declarada en el README. Pendiente la confirmación del profesor. |
+| 1. Cargador del S&P 500 | Hecho (PR #3) | `data/sp500_daily.csv` (FRED, serie `SP500`); `evaluate.load_sp500` lo lee; fuente declarada en el README. Tomado de FRED solo como benchmark y ya incluido en `artifacts/metrics_summary.csv`. |
 | 2. Textos de las preguntas 1 y 2 | Hecho | Este archivo, secciones 2 y 3. |
 | 3. Merge a `main` | Hecho (PRs #2 y #4) | `main` ya contiene los commits de los tres. |
 | 4. Variables no estacionarias en el estado | Opción B (argumento escrito, sin cambiar la observación) | Sección 3, "Volatilidad y otras variables muy persistentes". |
 | 5. Rechazo del precio en nivel con un nulo de bloques | Hecho | `data.target_relations` (columnas `mi_null_bloques_h1/h4/h24` de `feature_analysis_fold_{k}.csv`) y hoja 8 del EDA. Respalda el rechazo solo en parte. |
 | 6. Regímenes por fold y umbral de 60% | Hecho | `data.zigzag_turning_points`, `data.regime_threshold_table` y hoja 2 del EDA. |
-| 7. Diferencia de filas (75,588 contra 75,558) | Pendiente con el profesor | Sección 1; está documentada en el docstring de `data.py`. |
+| 7. Diferencia de filas (75,588 contra 75,558) | Supuesto declarado: CSV de Canvas usado tal cual | Sección 1; está documentada en el docstring de `data.py`. |
 | 8. Justificar q y R del filtro | Hecho | Sección 4. |
 | 9. Ventanas por tiempo | Declarada como limitación, sin cambiar código | Sección 5, con la medición en el fold 4. |
 | 10. Creencia de régimen con un HMM | No se hizo (opcional) | Cambiaría la observación que ya entrenó Paula. |
