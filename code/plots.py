@@ -112,9 +112,9 @@ def plot_price_regimes(fig, bars, regimes):
     legend_with_regimes(ax, "lower right")
 
 
-def plot_regime_table(fig, regimes):
-    """Tabla de regímenes: fechas, retorno, tendencia, volatilidad y drawdown."""
-    ax = fig.add_axes([0.04, 0.3, 0.92, 0.55])
+def plot_regime_table(fig, regimes, thresholds):
+    """Tabla de regímenes (fechas, retorno, tendencia, volatilidad, drawdown) y sensibilidad del umbral del zigzag."""
+    ax = fig.add_axes([0.04, 0.5, 0.92, 0.38])
     ax.axis("off")
     ax.set_title("Caracterización de regímenes · train del fold 4", loc="left")
     header = ["", "Régimen", "Inicio", "Fin", "Días", "Retorno\ntotal", "Tendencia\nlog anual",
@@ -125,7 +125,35 @@ def plot_regime_table(fig, regimes):
         for i, r in enumerate(regimes.itertuples(), start=1)
     ]
     table = ax.table(cellText=cells, colLabels=header, loc="upper center", cellLoc="center")
-    style_table(table, [0.04, 0.22, 0.09, 0.09, 0.06, 0.08, 0.09, 0.1, 0.09, 0.09], row_height=2.3)
+    style_table(table, [0.04, 0.22, 0.09, 0.09, 0.06, 0.08, 0.09, 0.1, 0.09, 0.09], font_size=9.5, row_height=1.55)
+    for col in range(len(header)):
+        table[0, col].set_height(table[0, col].get_height() * 1.6)
+
+    bottom = fig.add_axes([0.04, 0.24, 0.6, 0.27])
+    bottom.axis("off")
+    bottom.set_title("Umbral del zigzag sobre el cierre diario · solo train", loc="left")
+    header = ["Umbral", "Giros\nfold 4", "Regímenes\nfold 4", *[f"Confirmados\nfold {k}" for k in range(1, 5)]]
+    cells = [[f"{r.umbral:.0%}", r.giros_fold_4, r.regimenes_fold_4, r.confirmados_fold_1, r.confirmados_fold_2,
+              r.confirmados_fold_3, r.confirmados_fold_4] for r in thresholds.itertuples()]
+    table = bottom.table(cellText=cells, colLabels=header, loc="upper center", cellLoc="center")
+    style_table(table, [0.1, 0.13, 0.15, 0.155, 0.155, 0.155, 0.155], font_size=9.5, row_height=1.5)
+    for col in range(len(header)):
+        table[0, col].set_height(table[0, col].get_height() * 1.7)
+    chosen = thresholds.set_index("umbral").loc[data.REGIME_THRESHOLD]
+    fig.text(0.67, 0.51, "Los regímenes son solo descriptivos: no entran al\n"
+                         "estado del agente ni a ninguna decisión.\n\n"
+                         f"Con {data.REGIME_THRESHOLD:.0%}, el zigzag marca {chosen.giros_fold_4} giros; la tabla\n"
+                         "de arriba une a mano el rebote de 2018-02-05\n"
+                         "a 2018-03-04.\n"
+                         "Con 50% el ciclo 2020-21 se parte en la corrección\n"
+                         "de abril a julio de 2021; con 70% se pierden la\n"
+                         "recuperación de 2019 y la caída del COVID. 60%\n"
+                         "separa ciclos de mercado y no correcciones\n"
+                         "intermedias.\n\n"
+                         "\"Confirmados\": giros que el zigzag ya confirma con\n"
+                         "solo el train de ese fold (el último tramo queda\n"
+                         "abierto). \"Fold 4\": train del fold 4.",
+             fontsize=9.5, color=INK, va="top")
 
 
 def plot_drawdown_volatility(fig, bars, regimes):
@@ -341,7 +369,7 @@ def write_eda_pdf(bars, path=data.ARTIFACTS_DIR / "btcusdt_eda.pdf", raw=None):
         plt.close(fig)
 
         fig = new_page("2. Caracterización de regímenes")
-        plot_regime_table(fig, regimes)
+        plot_regime_table(fig, regimes, data.regime_threshold_table(bars))
         add_design_note(fig, f"la volatilidad anualizada va de {regimes['vol_anualizada'].min():.0%} a {regimes['vol_anualizada'].max():.0%} "
                              f"y el drawdown llega a {regimes['max_drawdown'].min():.0%}; ningún régimen representa a todo el train. "
                              "Por eso el estado incluye volatilidad y la creencia de tendencia con su incertidumbre, y cada fold se normaliza solo con su train.")

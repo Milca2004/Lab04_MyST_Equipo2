@@ -398,13 +398,17 @@ EDA_FOLD = 4  # el train del fold 4 (2017-08 a 2024-12) contiene a los demás
 HORIZONS = (1, 4, 24)
 HOURS_PER_YEAR = 24 * 365
 
-# Regímenes del train del fold 4. Las fronteras son los puntos de giro que
-# da un zigzag de 60% sobre el cierre diario (UTC) del train del fold 4,
-# calculado durante el desarrollo: máximos 2017-12-16, 2019-06-26 y
-# 2021-11-08; mínimos 2018-12-15, 2020-03-12 y 2022-11-21. Se omitió el
-# rebote de un mes de 2018-02-05 a 2018-03-04 (también lo marca el zigzag)
-# por ser ruido dentro del mercado bajista de 2018. Los regímenes alternan
-# alcista y bajista (ver el signo de retorno_total en characterize_regimes).
+# Regímenes del train del fold 4. Las fronteras son los puntos de giro que da
+# zigzag_turning_points(daily_close(eda_train(bars)), REGIME_THRESHOLD):
+# máximos 2017-12-16, 2019-06-26 y 2021-11-08; mínimos 2018-12-15, 2020-03-12
+# y 2022-11-21. Se omitió a mano el rebote de un mes de 2018-02-05 a
+# 2018-03-04 (también lo marca el zigzag) por ser ruido dentro del mercado
+# bajista de 2018. Los regímenes alternan alcista y bajista (ver el signo de
+# retorno_total en characterize_regimes). Son SOLO descriptivos: no entran al
+# estado del agente ni a ninguna decisión. regime_threshold_table muestra por
+# qué el umbral es 60%.
+REGIME_THRESHOLD = 0.60
+THRESHOLD_GRID = (0.40, 0.50, 0.60, 0.70)
 REGIMES = (
     ("Burbuja 2017", "2017-08-17", "2017-12-16"),
     ("Invierno cripto 2018", "2017-12-17", "2018-12-15"),
@@ -422,6 +426,66 @@ REJECTED_FAMILY = "rechazada_nivel"
 def eda_train(bars):
     """Barras del train del fold usado en el EDA general (fold 4)."""
     return get_folds()[EDA_FOLD - 1].split(bars)[0]
+
+
+def daily_close(bars):
+    """Cierre diario (UTC): último cierre horario de cada día con barras."""
+    return bars["close"].resample("D").last().dropna()
+
+
+def zigzag_turning_points(daily_close, threshold):
+    """Puntos de giro de un zigzag porcentual sobre el cierre diario.
+
+    Un máximo se confirma cuando el precio cae ``threshold`` (p. ej. 60%)
+    desde él, y un mínimo cuando el precio sube ``threshold`` desde él. El
+    primer tramo arranca cuando el precio se aleja ``threshold`` del primer
+    cierre. Devuelve los giros internos confirmados (sin el primer ni el
+    último día), con columnas fecha, precio y tipo ("maximo" o "minimo").
+
+    NO es causal: un giro solo se conoce días o meses después, cuando el
+    precio ya se alejó. Por eso sirve para describir el train, no como
+    variable del estado.
+    """
+    dates, prices = daily_close.index, daily_close.to_numpy()
+    turns, direction = [], 0
+    extreme = 0
+    for i, price in enumerate(prices):
+        if direction == 0:
+            if price >= prices[0] * (1 + threshold):
+                direction, extreme = 1, i
+            elif price <= prices[0] * (1 - threshold):
+                direction, extreme = -1, i
+        elif direction == 1:
+            if price > prices[extreme]:
+                extreme = i
+            elif price <= prices[extreme] * (1 - threshold):
+                turns.append((dates[extreme], prices[extreme], "maximo"))
+                direction, extreme = -1, i
+        else:
+            if price < prices[extreme]:
+                extreme = i
+            elif price >= prices[extreme] * (1 + threshold):
+                turns.append((dates[extreme], prices[extreme], "minimo"))
+                direction, extreme = 1, i
+    return pd.DataFrame(turns, columns=["fecha", "precio", "tipo"])
+
+
+def regime_threshold_table(bars, thresholds=THRESHOLD_GRID):
+    """Sensibilidad del umbral del zigzag (solo train).
+
+    Por umbral: giros y regímenes en el train del fold 4, y regímenes
+    confirmados usando SOLO el train de cada fold (el último tramo de cada
+    train queda abierto: su giro final aún no se confirma y no se cuenta).
+    """
+    rows = []
+    for threshold in thresholds:
+        turns_fold4 = zigzag_turning_points(daily_close(eda_train(bars)), threshold)
+        row = {"umbral": threshold, "giros_fold_4": len(turns_fold4), "regimenes_fold_4": len(turns_fold4) + 1}
+        for fold in get_folds():
+            turns = zigzag_turning_points(daily_close(fold.split(bars)[0]), threshold)
+            row[f"confirmados_fold_{fold.number}"] = len(turns)
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def max_drawdown(close):
