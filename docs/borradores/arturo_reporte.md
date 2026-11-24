@@ -113,6 +113,31 @@ Council con 5 consejeros, 5 revisiones anónimas y chairman. Los 5 revisores eli
 | γ y duración | `info["tau_horas"]`; DQN con `SMDPReplayBuffer` (γ_h^τ, γ_h = 0.999/h) | El Contrarian decía que había que reescribir `DQN.train()`. Es falso: `dqn.py` usa `replay_data.discounts`. **PPO:** su GAE usa un γ fijo por decisión. Es una limitación declarada; τ queda registrado. |
 | Una posición a la vez | Sí | **Posiciones traslapadas:** más reglas de capital. Se pierden señales consecutivas mientras hay una operación abierta. |
 
+### 2.1 Correspondencia con la clase S19
+
+Mapa entre las piezas de un `gym.Env` que vimos en la clase S19 ("Deep RL en la práctica") y nuestro entorno.
+
+| Pieza de la clase | En nuestro entorno (`code/env.py`) |
+|---|---|
+| Mapa de lo que ocurre y acciones | Barras horarias de BTCUSDT (OHLCV, con huecos). Acciones: quedarse fuera, abrir largo o abrir corto. Cerrar lo hacen las barreras (decisión a). |
+| `__init__` | `action_space = Discrete(3)` y `observation_space = Box(-10, 10, (24,), float32)`. Parámetros: horizonte 24 h, stop y take-profit a ±1·vol_24·√24, costo 0.00125 por lado, capital inicial 1,000,000. |
+| `_obs` | `_observation()`: las 21 variables normalizadas de `data.py` en la barra t − `data_delay_bars`, más 3 valores de estado (decisión c). |
+| `reset` | `super().reset(seed=seed)` crea `self.np_random`. En train, `_sample_start` elige con `self.np_random.integers` una barra de inicio al azar y la ventana dura 720 h; en valid y test empieza en la primera barra. |
+| `step` | Un paso es una decisión. Si abre, simula la operación hasta su cierre (`_run_trade`) y paga 100·log(capital después / antes), neto de 0.125% por lado. Si se queda fuera, la recompensa es 0. |
+| `terminated` / `truncated` | Decisión d. |
+| Validación en 3 niveles | `check_env` sin advertencias (`tests/test_env.py`); operación de referencia calculada a mano (`tests/test_reference_trade.py`); líneas base con costos (aleatoria en `tests/test_env.py`, siempre fuera y siempre largo en `tests/test_baselines.py`). Guardar y cargar da las mismas acciones (`tests/test_save_load.py`). |
+
+Decisiones de diseño frente a la clase:
+
+| | Decisión de diseño | Por qué |
+|---|---|---|
+| a | **No hay acción "cerrar".** El stop, el take-profit o las 24 h cierran la operación. | Diseño semi-Markov de Powell: el agente decide solo cuando está fuera. El PDF del lab dice "si su diseño la permite", y el nuestro no la necesita. |
+| b | **No hay acciones inválidas.** | Solo se decide estando fuera, así que abrir, quedarse fuera o abrir al otro lado siempre es válido. No hace falta máscara ni penalización. |
+| c | **La observación no trae posición ni precio de entrada.** | Al decidir siempre está fuera (posición 0, sin precio de entrada ni tiempo en posición). Los 3 valores de estado son: `log(C_t / C_0)` (capital acumulado), `C_t / C_máx − 1` (drawdown del episodio, ≤ 0) y `log1p(horas faltantes) / log1p(145)` (cuánto hueco de datos hubo antes de la barra observada). Los dos primeros son componente física R_t; el tercero está en el código junto a ellos, pero en la formulación de Powell es información I_t (estado del calendario de datos). La variante `per_bar` agrega lado y fracción del horizonte transcurrida; no es el diseño. |
+| d | **terminated siempre es False; truncated marca el fin de la ventana (720 h en train) o de la partición.** | No hay ruina ni límite de riesgo, y el mercado no se acaba, por eso el fin de datos es truncamiento y SB3 hace bootstrap. Nunca se trunca con una operación abierta: en el diseño la operación se cierra dentro del mismo `step`, y en `per_bar` `_is_truncated` devuelve `False` mientras haya pasos pendientes. |
+| e | **No se usa VecNormalize.** | Normalizador propio (`data.Normalizer`, mediana e IQR) ajustado solo con el train de cada fold y aplicado sin cambios a valid y test. |
+| f | **Se usa env.rollout en lugar de evaluate_policy.** | Necesitamos la bitácora de operaciones y la curva de capital, y cada paso dura una duración variable τ (de 1 a 24 h, o más con huecos), así que la recompensa media por paso no es comparable. La política es la misma: `predict(deterministic=True)`. |
+
 ## 3. Contribución (council (1), antes de cerrar `reward.py`)
 
 **Veredicto:**
@@ -173,7 +198,7 @@ La alternativa por paso (`reward_timing="per_bar"`) paga el cambio marcado a mer
 | Valid | Siempre largo | 584 | −0.23% | −1.44 | −2.80 |
 | Valid | Siempre fuera | 0 | — | 0 | — |
 
-El agente aleatorio pierde en los 4 folds de train y de valid, como exige la sección 3.5. Con miles de operaciones el retorno total se satura en −100%, por eso comparamos con el log del capital y el retorno medio por operación. "Siempre largo" con barreras **no** es comprar y mantener: el benchmark de buy & hold lo calcula `evaluate.py`.
+El agente aleatorio pierde en los 4 folds de train y de valid, como exige la sección 3.5. Dos pruebas más lo verifican en código: `tests/test_baselines.py` (siempre fuera deja el capital exactamente igual; siempre largo pierde en el train de los 4 folds). Con miles de operaciones el retorno total se satura en −100%, por eso comparamos con el log del capital y el retorno medio por operación. "Siempre largo" con barreras **no** es comprar y mantener: el benchmark de buy & hold lo calcula `evaluate.py`.
 
 ## 5. Pregunta 6 y sección 3.10: sensibilidad y supuestos de ejecución
 
