@@ -131,6 +131,8 @@ En la formulación de Powell, μ̂_t y σ̂_t son **creencia**, no estado físic
 
 El efecto es moderado (hasta un 12% más de reloj en el test del fold 4) y no cambiamos las variables para no invalidar el entrenamiento ya hecho. La corrección sería usar ventanas por tiempo (`rolling("24h")`). Esta tabla solo cuenta barras y tiempos; no usa precios ni retornos de valid ni de test.
 
+**Reproducibilidad de mis artefactos:** en un clon limpio (macOS, Python 3.12.2) `feature_analysis_fold_{1,2,3,4}.csv` coinciden con los del repo hasta ~1e-12 de diferencia relativa y `btcusdt_eda.pdf` sale idéntico byte a byte. Lo que depende del entrenamiento de PPO y DQN sí varía entre máquinas (nota de reproducibilidad del README).
+
 **Otras limitaciones:** (1) las fronteras de los regímenes salen del train del fold 4, que incluye valid y test del fold 1, y por eso son solo descriptivas; (2) los datos tienen una sola serie de BTC, así que cuatro folds con trains que se traslapan no son cuatro experimentos independientes; (3) probamos muchas configuraciones y variables sobre los mismos datos, lo que es un riesgo de *data snooping* (la corrección formal sería un Deflated Sharpe Ratio o un Reality Check, que no aplicamos).
 
 ## 6. Estado de las solicitudes de Arturo
