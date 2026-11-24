@@ -54,6 +54,8 @@ Este comando corre el pipeline completo y escribe todos los artefactos en `artif
 
 **Semilla:** 42. Está fijada en `main.py` y se usa en todo lo que tiene aleatoriedad. Aun con las semillas fijas, los números pueden variar un poco entre sistemas operativos y procesadores, porque las operaciones de punto flotante de numpy y torch no son idénticas en todas las plataformas.
 
+**Nota de reproducibilidad.** Con la semilla 42, los datos, el EDA y las políticas sin entrenamiento (aleatoria, siempre largo, siempre fuera, comprar y mantener BTC y S&P 500) se reproducen hasta el redondeo (diferencias ≤ 1e-12). PPO y DQN no: varían entre máquinas y versiones de torch. En una corrida limpia en un clon nuevo (macOS, Python 3.12.2, torch 2.15.0 sin CUDA) dieron PPO −59.0% y DQN −47.9% de retorno total (media de los 4 folds de test); los documentos reportan la corrida de `artifacts/` (Python 3.12.3, torch 2.15.0+cu132), con PPO −51.4% y DQN −28.1%. La conclusión se mantiene: 0 de 40 modelos ganan en la corrida limpia (1 de 40 en la de `artifacts/`), |t| ≤ 2 de la ventaja bruta en las dos corridas y, en promedio, los dos pierden contra comprar y mantener BTC y contra el S&P 500. Lo que no es estable entre corridas son las cifras puntuales y el orden de la ablación por familia.
+
 ## Pruebas
 
 ```bash
